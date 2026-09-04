@@ -1,0 +1,18 @@
+{
+  "name": "relaxcare",
+  "version": "1.0.0",
+  "description": "RelaxCare 按摩／SPA 連鎖營運管理系統：輪鐘排班、指名與抽成分潤、儲值與次卡預收負債、床位排程、健康禁忌閘門、薪資結算",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "seed": "node scripts/seed.js",
+    "test": "node scripts/consistency-test.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^11.10.0",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2"
+  }
+}
