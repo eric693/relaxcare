@@ -228,7 +228,10 @@ router.post('/tickets/:id/start', requireStaff('tickets'), (req, res) => {
   db.prepare(`UPDATE tickets SET status = 'serving', actual_start = ?,
               gate_note = CASE WHEN ? <> '' THEN ? ELSE gate_note END WHERE id = ?`)
     .run(now, String(req.body?.gate_note || ''), String(req.body?.gate_note || ''), t.id);
-  rotation.consume({ therapistId: t.therapist_id, workDate: (t.start_at || now).slice(0, 10),
+  // 輪次一律掛在**營業日**那張班上，跟開單時用的口徑一致。
+  // 用日曆日的話，24 小時店凌晨兩點的單會把輪次加在「今天」，
+  // 但開單時是加在「昨天的班」—— 之後下鐘與取消都找錯那一列，輪次就再也還不回去。
+  rotation.consume({ therapistId: t.therapist_id, workDate: t.biz_date || bizDate(t.start_at || now),
     assignType: t.assign_type, ticketId: t.id, actor: actorOf(req) });
   audit('staff', req.user.id, req.user.name, `${t.ticket_no} 上鐘`);
   res.json({ ticket: fullTicket(t.id), check });
@@ -407,8 +410,8 @@ const doCheckout = db.transaction((ticketId, body, actor) => {
   }
 
   if (t.therapist_id) {
-    rotation.release({ therapistId: t.therapist_id, workDate: (t.actual_start || t.start_at || now).slice(0, 10),
-      ticketId, actor });
+    rotation.release({ therapistId: t.therapist_id,
+      workDate: t.biz_date || bizDate(t.actual_start || t.start_at || now), ticketId, actor });
   }
   // 集點與介紹獎勵。放在交易裡面，這樣「結帳成功但點數沒發」不可能發生。
   const pts = loyalty.earnForTicket({ ticketId, actor });
@@ -470,7 +473,8 @@ const doCancel = db.transaction((ticketId, reason, status, actor) => {
   // 已開發票的單要作廢發票（作廢理由沿用取消理由）
   invoicing.voidForTicket({ ticketId, reason, actor });
   if (t.therapist_id && ['serving', 'done'].includes(t.status)) {
-    rotation.rollback({ therapistId: t.therapist_id, workDate: (t.actual_start || t.start_at).slice(0, 10),
+    rotation.rollback({ therapistId: t.therapist_id,
+      workDate: t.biz_date || bizDate(t.actual_start || t.start_at),
       ticketId, assignType: t.assign_type, actor, reason: `${t.ticket_no} 取消` });
   }
   db.prepare(`UPDATE tickets SET status = ?, paid_cash = 0, paid_wallet = 0, paid_pass = 0, paid_voucher = 0,

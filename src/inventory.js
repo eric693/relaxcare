@@ -13,7 +13,7 @@
 // 成本用「移動加權平均」：進貨時把新舊庫存的成本混合成一個單價，
 // 銷售出庫就用當下的那個單價記成本。先進先出更精確，但要逐批追蹤，
 // 對一家賣十幾樣保養品的按摩店來說，多出來的準確度換不回那個複雜度。
-const { db, nowStamp, today, nextSerial, money, yuan, audit } = require('./db');
+const { db, nowStamp, today, nextSerial, money, yuan, audit, bizExpr } = require('./db');
 
 const KINDS = {
   init: '期初', purchase: '進貨', return: '退貨', sale: '銷售出庫', sale_void: '銷售回沖',
@@ -212,8 +212,10 @@ function txns({ productId, storeId, kind, from, to, limit = 500 } = {}) {
   if (productId) { where.push('x.product_id = ?'); args.push(productId); }
   if (storeId) { where.push('x.store_id = ?'); args.push(storeId); }
   if (kind) { where.push('x.kind = ?'); args.push(kind); }
-  if (from) { where.push('substr(x.created_at,1,10) >= ?'); args.push(from); }
-  if (to) { where.push('substr(x.created_at,1,10) <= ?'); args.push(to); }
+  // 期間用營業日，跟鐘單、損益同一個口徑（凌晨賣掉的商品算前一天的生意）
+  const xe = bizExpr('x.created_at');
+  if (from) { where.push(`${xe.sql} >= ?`); args.push(...xe.args, from); }
+  if (to) { where.push(`${xe.sql} <= ?`); args.push(...xe.args, to); }
   return db.prepare(`SELECT x.*, p.name AS product_name, p.sku, s.name AS store_name,
       ps.name AS peer_store_name, t.ticket_no
     FROM stock_txns x
@@ -249,9 +251,12 @@ function overview({ storeId } = {}) {
 function movement(start, end, storeId) {
   const f = storeId ? ' AND x.store_id = ?' : '';
   const args = storeId ? [storeId] : [];
+  // 這個函數的結果會進損益表的商品銷貨成本，所以期間口徑必須跟營收（biz_date）一致 ——
+  // 用日曆日的話，24 小時店凌晨賣的商品成本會落在跟營收不同的月份。
+  const xe = bizExpr('x.created_at');
   const rows = db.prepare(`SELECT x.kind, COALESCE(SUM(x.qty),0) qty, COALESCE(SUM(x.amount),0) amount
-    FROM stock_txns x WHERE substr(x.created_at,1,10) >= ? AND substr(x.created_at,1,10) < ?${f}
-    GROUP BY x.kind`).all(start, end, ...args);
+    FROM stock_txns x WHERE ${xe.sql} >= ? AND ${xe.sql} < ?${f}
+    GROUP BY x.kind`).all(...xe.args, start, ...xe.args, end, ...args);
   const m = Object.fromEntries(rows.map(r => [r.kind, r]));
   const get = (k, field) => Math.abs((m[k] || {})[field] || 0);
   const cogs = money(get('sale', 'amount') - get('sale_void', 'amount'));

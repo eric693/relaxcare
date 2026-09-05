@@ -202,8 +202,9 @@ function rollStatuses() {
     db.prepare(`UPDATE tickets SET status = 'done', actual_end = COALESCE(NULLIF(actual_end,''), end_at),
                 note = TRIM(note || ' ｜系統自動結束（未於當日結帳）') WHERE id = ?`).run(s.id);
     if (s.therapist_id) {
+      // 用營業日找班，跟開單／上鐘／取消同一個口徑（凌晨的單掛在前一天的班上）
       const sh = db.prepare('SELECT * FROM shifts WHERE work_date = ? AND therapist_id = ?')
-        .get(s.start_at.slice(0, 10), s.therapist_id);
+        .get(s.biz_date || bizDate(s.start_at), s.therapist_id);
       if (sh && sh.status === 'serving') {
         db.prepare("UPDATE shifts SET status = 'off', checkout_at = ? WHERE id = ?").run(nowStamp(), sh.id);
       }

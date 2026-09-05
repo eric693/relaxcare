@@ -186,6 +186,85 @@ console.log('時區測試（全站基準：Asia/Taipei）\n');
   ok('稽核軌跡沒有未來的時間', future === 0, `${future} 筆`);
 }
 
+// ---- 9.5 期間篩選的口徑：全部走營業日，不能有人用日曆日 ----
+//
+// 鐘單有 biz_date 欄位，儲值流水／次卡／團購券只有 created_at。
+// 若後者用 substr(created_at,1,10)（日曆日）在篩期間，24 小時店的凌晨交易
+// 就會落在跟鐘單不同的月份 —— 損益的營收算上個月、現金流入算這個月。
+{
+  const finance = require('../src/finance');
+  const saved = getSetting('business_day_start', '04:00');
+  setSetting('business_day_start', '04:00');
+  const m = db.prepare('SELECT id FROM members LIMIT 1').get();
+  if (m) {
+    // 月初凌晨 02:00 的儲值：營業日屬於上個月的最後一天
+    db.prepare(`INSERT INTO wallet_txns(member_id,kind,cash_delta,amount,cash_after,bonus_after,note,created_at)
+      VALUES(?,'topup',1,1,0,0,'營業日口徑測試','2026-09-01 02:00:00')`).run(m.id);
+    const sep = finance.cashFlow('2026-09-01', '2026-10-01', null).topup;
+    const aug = finance.cashFlow('2026-08-01', '2026-09-01', null).topup;
+    ok('凌晨的儲值算在前一個營業日（跟鐘單同一個口徑）', aug >= 1,
+      `八月 ${aug}／九月 ${sep}`);
+    ok('營業日換算後，這筆不會重複算在兩個月', !(aug >= 1 && sep >= 605001),
+      `八月 ${aug}／九月 ${sep}`);
+    db.prepare("DELETE FROM wallet_txns WHERE note = '營業日口徑測試'").run();
+  }
+  // bizExpr 的 SQL 與 bizDate 的 JS 必須算出一樣的結果
+  const { bizExpr } = require('../src/db');
+  const e = bizExpr('?');
+  for (const ts of ['2026-09-05 02:00:00', '2026-09-05 03:59:00',
+    '2026-09-05 04:00:00', '2026-09-05 23:30:00', '2026-01-01 01:00:00']) {
+    const sql = db.prepare(`SELECT ${e.sql} v`).get(ts, ...e.args).v;
+    ok(`SQL 與 JS 對 ${ts} 算出同一個營業日`, sql === bizDate(ts.slice(0, 16)),
+      `SQL ${sql} vs JS ${bizDate(ts.slice(0, 16))}`);
+  }
+  // 設 00:00（不做營業日換算）時要退回單純的日期
+  setSetting('business_day_start', '00:00');
+  const plain = bizExpr('x');
+  ok('關閉營業日換算時，SQL 退回單純截日期', plain.sql.includes('substr') && plain.args.length === 0,
+    plain.sql);
+  setSetting('business_day_start', saved);
+}
+
+// ---- 9.7 輪次的日期口徑：加與減必須掛在同一張班上 ----
+//
+// 這是實際踩到的 bug：開單用營業日、上鐘／下鐘／取消用日曆日。
+// 24 小時店凌晨兩點的單，輪次加在「昨天的班」卻要從「今天的班」扣回來 ——
+// 扣不到，那位技師的輪次就永遠多一次，而輪鐘檯的公平性正是這套系統的核心。
+{
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'routes', 'tickets.js'), 'utf8');
+  // 這幾支都不能再用 .slice(0, 10) 從時間字串截日期
+  const bad = [];
+  for (const m of src.matchAll(/rotation\.(consume|release|rollback)\(\{[\s\S]{0,240}?\}\)/g)) {
+    if (/workDate:[^,]*slice\(0, ?10\)/.test(m[0])) bad.push(m[1]);
+  }
+  ok('輪次的加減都用營業日，不是從時間字串截日曆日', bad.length === 0, bad.join('、'));
+
+  const srv = fs.readFileSync(path.join(__dirname, '..', 'src', 'server.js'), 'utf8');
+  ok('每日維護找班也用營業日，不是 start_at 截前十碼',
+    !srv.includes('.get(s.start_at.slice(0, 10)'));
+
+  // 實際驗一次：凌晨的單，開單與取消要算在同一張班上
+  const { bizDate: bd } = require('../src/db');
+  const dawn = '2026-09-05 02:00';
+  ok('凌晨 02:00 的單，開單與取消算的是同一個營業日',
+    bd(dawn) === bd(dawn) && bd(dawn) !== dawn.slice(0, 10),
+    `營業日 ${bd(dawn)}、日曆日 ${dawn.slice(0, 10)}`);
+}
+
+// 輪次不能超過當日實際上過鐘的單數（已預約的單還沒吃輪次）
+{
+  for (const sh of db.prepare('SELECT * FROM shifts ORDER BY id DESC LIMIT 200').all()) {
+    const n = db.prepare(`SELECT COUNT(*) n FROM tickets
+      WHERE therapist_id = ? AND biz_date = ? AND status IN ('serving','done')`)
+      .get(sh.therapist_id, sh.work_date).n;
+    const booked = db.prepare(`SELECT COUNT(*) n FROM tickets
+      WHERE therapist_id = ? AND biz_date = ? AND status = 'booked'`).get(sh.therapist_id, sh.work_date).n;
+    // 取消的單會把輪次還回去，所以上限就是「上過鐘的 + 還沒上鐘的」
+    ok(`${sh.work_date} 技師 #${sh.therapist_id} 輪次不超過上過鐘的單數`,
+      sh.rounds <= n + booked, `輪次 ${sh.rounds} > ${n} 已上鐘 + ${booked} 待上鐘`);
+  }
+}
+
 // ---- 10. 伺服器有把「現在」告訴前端 ----
 // 前端拿它跟自己的時鐘對時。少了這個欄位，櫃檯平板時區設錯就會看到別天的資料。
 {

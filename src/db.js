@@ -341,6 +341,24 @@ function bizDate(stamp) {
   if (!hhmm) return d;
   return hhmm < cut ? shiftDate(d, -1) : d;
 }
+// 給 SQL 用的營業日運算式。
+//
+// 鐘單有 biz_date 欄位可以直接比，但儲值流水、次卡、費用這些表只有 created_at。
+// 它們原本是用 substr(created_at,1,10)（日曆日）在篩期間 —— 對 24 小時店來說，
+// 凌晨兩點的儲值會落在「隔天」，而同一時刻的鐘單卻算「前一天」。
+// 兩邊在月底就會對不起來：損益的營收算上個月，現金流入算這個月。
+//
+// 回傳的是一段 SQL 與它的參數，例如 bizExpr('w.created_at') →
+//   { sql: "date(w.created_at, '-240 minutes')", args: [240] }
+// 用法：`WHERE ${e.sql} >= ?` 並把 e.args 放在最前面。
+function bizExpr(col) {
+  const cut = getSetting('business_day_start', '04:00');
+  const mins = (!cut || cut === '00:00') ? 0
+    : Number(cut.slice(0, 2)) * 60 + Number(cut.slice(3, 5));
+  if (!mins) return { sql: `substr(${col},1,10)`, args: [] };
+  return { sql: `date(${col}, '-' || ? || ' minutes')`, args: [mins] };
+}
+
 // 營業日的起訖時間點（含跨午夜）。看板的時間軸與日結的區間都用這個。
 function bizRange(dateStr) {
   const cut = getSetting('business_day_start', '04:00');
@@ -410,6 +428,6 @@ module.exports = {
   db, SECRET, ensureColumns,
   getSetting, setSetting, setSettingDefault, num, getList, LIST_KEYS, UI_TEXT_KEYS, levelRates,
   audit, nextSerial,
-  today, nowStamp, fmtStamp, fmtDate, thisMonth, bizDate, bizRange, toMinutes, fromMinutes, addMinutes, shiftDate, addMonths,
+  today, nowStamp, fmtStamp, fmtDate, thisMonth, bizDate, bizExpr, bizRange, toMinutes, fromMinutes, addMinutes, shiftDate, addMonths,
   dateDiff, minutesBetween, fmtDuration, monthRange, overlaps, money, yuan
 };

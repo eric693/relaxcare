@@ -267,7 +267,11 @@ for (let d = DAYS; d >= 0; d--) {
 
     const storeRooms = roomRows.filter(r => r.store_id === storeId);
     const count = busy ? rnd(14, 24) : rnd(7, 15);
-    const roundsMap = {};
+    // 輪次要記在**營業日**那張班上，不是迴圈的這一天。
+    // 24 小時店有兩成的單落在凌晨 0~3 點，那些單的營業日是前一天 ——
+    // 記錯的話，技師的輪次會比他當天實際上過的鐘還多，
+    // 而「輪次對不上鐘數」正是輪鐘制最不能出錯的地方。
+    const roundsMap = {};    // key: `${營業日}|${技師 id}`
     // 同一位技師／同一個床位不能同時段有兩張單 —— 正式流程的閘門會擋，
     // 示範資料若隨機撞在一起，一致性測試就會抓到「重疊卻沒有放行理由」。
     const busyMap = { th: {}, room: {} };
@@ -416,18 +420,30 @@ for (let d = DAYS; d >= 0; d--) {
         try { loyalty.earnForTicket({ ticketId: id, actor: '示範資料' }); } catch { /* 忽略 */ }
       }
 
-      // 輪序軌跡：指名不計輪次（跟系統預設一致）
-      const before = roundsMap[th.id] || 0;
-      const after = designated ? before : before + 1;
-      roundsMap[th.id] = after;
-      rotation.log({ work_date: date, store_id: storeId, therapist_id: th.id, therapist_name: th.name,
-        event: designated ? 'designate' : 'assign', ticket_id: id,
-        seq_after: seqMap[th.id], rounds_before: before, rounds_after: after,
-        reason: designated ? '指名不計輪次' : '計入輪次', actor: '系統' });
+      // 輪序軌跡：指名不計輪次（跟系統預設一致）。
+      //
+      // **只有真的上過鐘的單才吃輪次**。還停在「已預約」的單還沒上鐘，
+      // 正式流程要等 /tickets/:id/start 才會 consume ——
+      // 這裡先算掉的話，那張單日後被上鐘時會再吃一次，輪次就多出來，
+      // 而一致性測試的「輪次不超過鐘數」會抓到它。
+      if (status === 'done') {
+        const key = `${biz}|${th.id}`;
+        const before = roundsMap[key] || 0;
+        const after = designated ? before : before + 1;
+        roundsMap[key] = after;
+        rotation.log({ work_date: biz, store_id: storeId, therapist_id: th.id, therapist_name: th.name,
+          event: designated ? 'designate' : 'assign', ticket_id: id,
+          seq_after: seqMap[th.id], rounds_before: before, rounds_after: after,
+          reason: designated ? '指名不計輪次' : '計入輪次', actor: '系統' });
+      }
       ticketCount++;
     }
-    for (const [tid, r] of Object.entries(roundsMap)) {
-      db.prepare('UPDATE shifts SET rounds = ? WHERE work_date = ? AND therapist_id = ?').run(r, date, tid);
+    for (const [key, r] of Object.entries(roundsMap)) {
+      const [bizDay, tid] = key.split('|');
+      // 凌晨的單會落在前一個營業日，那張班是上一輪迴圈建的 ——
+      // 所以是「加上去」而不是覆蓋，否則會把前一天已經算好的輪次蓋掉。
+      db.prepare('UPDATE shifts SET rounds = rounds + ? WHERE work_date = ? AND therapist_id = ?')
+        .run(r, bizDay, tid);
     }
   }
 }

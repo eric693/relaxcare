@@ -221,9 +221,13 @@ for (const d of db.prepare('SELECT DISTINCT work_date FROM shifts ORDER BY work_
     seqs[k].push(s.queue_seq);
     ok(`${d.work_date} 簽到序 > 0`, s.queue_seq > 0);
     ok(`${d.work_date} 輪次不為負`, s.rounds >= 0);
-    // 當日輪次不可能超過當日鐘單數
+    // 當日輪次不可能超過當日鐘單數。
+    //
+    // 用 **biz_date** 比對，不是從時間字串截日曆日 —— shifts.work_date 本來就是營業日，
+    // 24 小時店凌晨兩點的單屬於前一個營業日。這條斷言原本用日曆日，
+    // 於是每次示範資料剛好產生凌晨的單就會紅一次，看起來像偶發，其實是口徑不一致。
     const n = db.prepare(`SELECT COUNT(*) n FROM tickets
-      WHERE therapist_id = ? AND substr(COALESCE(NULLIF(actual_start,''), start_at),1,10) = ?
+      WHERE therapist_id = ? AND biz_date = ?
         AND status IN ('serving','done','booked')`).get(s.therapist_id, d.work_date).n;
     ok(`${d.work_date} 技師 #${s.therapist_id} 輪次不超過鐘數`, s.rounds <= n,
       `輪次 ${s.rounds} > 鐘數 ${n}`);

@@ -408,8 +408,10 @@ const EXPORTS = {
     module: 'wallets',
     run(q) {
       const where = [], args = [];
-      if (q.from) { where.push('substr(x.created_at,1,10) >= ?'); args.push(q.from); }
-      if (q.to) { where.push('substr(x.created_at,1,10) <= ?'); args.push(q.to); }
+      // 期間一律用營業日，跟畫面上其他報表同口徑
+      const xe = require('../db').bizExpr('x.created_at');
+      if (q.from) { where.push(`${xe.sql} >= ?`); args.push(...xe.args, q.from); }
+      if (q.to) { where.push(`${xe.sql} <= ?`); args.push(...xe.args, q.to); }
       if (q.member_id) { where.push('x.member_id = ?'); args.push(q.member_id); }
       return db.prepare(`SELECT x.*, m.name AS member_name FROM wallet_txns x
         LEFT JOIN members m ON m.id = x.member_id
@@ -548,8 +550,10 @@ const EXPORTS = {
     module: 'loyalty',
     run(q) {
       const where = [], args = [];
-      if (q.from) { where.push('substr(x.created_at,1,10) >= ?'); args.push(q.from); }
-      if (q.to) { where.push('substr(x.created_at,1,10) <= ?'); args.push(q.to); }
+      // 期間一律用營業日，跟畫面上其他報表同口徑
+      const xe = require('../db').bizExpr('x.created_at');
+      if (q.from) { where.push(`${xe.sql} >= ?`); args.push(...xe.args, q.from); }
+      if (q.to) { where.push(`${xe.sql} <= ?`); args.push(...xe.args, q.to); }
       if (q.member_id) { where.push('x.member_id = ?'); args.push(q.member_id); }
       return db.prepare(`SELECT x.*, m.name AS member_name, m.phone, t.ticket_no, pm.name AS peer_name
         FROM point_txns x

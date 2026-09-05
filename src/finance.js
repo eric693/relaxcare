@@ -8,7 +8,7 @@
 //   現金流入 cash_in    ：實際進來的錢（含儲值、賣卡）＝ 老闆看的「今天收了多少」
 //   服務營收 revenue    ：實際服務認列的收入（含用儲值／次卡付掉的部分）＝ 損益表的收入
 //   預收負債 liability  ：還沒服務完的餘額（見 prepaid.liability）
-const { db, monthRange, num, today, yuan, money } = require('./db');
+const { db, monthRange, num, today, yuan, money, bizExpr } = require('./db');
 const prepaid = require('./prepaid');
 
 function storeFilter(storeId, alias = 't') {
@@ -53,6 +53,10 @@ function serviceRevenue(start, end, storeId) {
 }
 
 // 期間內實際收到的現金（鐘單現金 + 儲值 + 賣卡 - 退款）
+//
+// 期間篩選一律用**營業日**，不是日曆日。
+// 鐘單有 biz_date 欄位，其他表只有 created_at，所以用 bizExpr() 現算 ——
+// 兩邊用不同的口徑，24 小時店在月底就會出現「營收算上個月、現金流入算這個月」。
 function cashFlow(start, end, storeId) {
   const f = storeFilter(storeId);
   const dateExpr = 't.biz_date';
@@ -60,22 +64,28 @@ function cashFlow(start, end, storeId) {
     WHERE t.status = 'done' AND ${dateExpr} >= ? AND ${dateExpr} < ?${f.sql}`).get(start, end, ...f.args).v;
   const wf = storeId ? ' AND w.store_id = ?' : '';
   const wargs = storeId ? [storeId] : [];
+  const we = bizExpr('w.created_at');
   const topup = db.prepare(`SELECT COALESCE(SUM(w.amount),0) AS v FROM wallet_txns w
-    WHERE w.kind = 'topup' AND substr(w.created_at,1,10) >= ? AND substr(w.created_at,1,10) < ?${wf}`)
-    .get(start, end, ...wargs).v;
+    WHERE w.kind = 'topup' AND ${we.sql} >= ? AND ${we.sql} < ?${wf}`)
+    .get(...we.args, start, ...we.args, end, ...wargs).v;
   const refund = db.prepare(`SELECT COALESCE(SUM(w.amount),0) AS v FROM wallet_txns w
-    WHERE w.kind = 'refund' AND substr(w.created_at,1,10) >= ? AND substr(w.created_at,1,10) < ?${wf}`)
-    .get(start, end, ...wargs).v;
+    WHERE w.kind = 'refund' AND ${we.sql} >= ? AND ${we.sql} < ?${wf}`)
+    .get(...we.args, start, ...we.args, end, ...wargs).v;
   const pf = storeId ? ' AND p.store_id = ?' : '';
+  // 次卡用 created_at 而不是 buy_date：buy_date 是 today()（日曆日），
+  // 凌晨賣的卡會掛到隔天，跟同一刻的鐘單對不起來。
+  const pe = bizExpr('p.created_at');
   const pass = db.prepare(`SELECT COALESCE(SUM(p.price_paid),0) AS v FROM passes p
-    WHERE p.buy_date >= ? AND p.buy_date < ?${pf}`).get(start, end, ...wargs).v;
+    WHERE ${pe.sql} >= ? AND ${pe.sql} < ?${pf}`).get(...pe.args, start, ...pe.args, end, ...wargs).v;
+  const xe = bizExpr('x.created_at');
   const passRefund = db.prepare(`SELECT COALESCE(SUM(x.amount),0) AS v FROM pass_txns x
-    WHERE x.kind = 'refund' AND substr(x.created_at,1,10) >= ? AND substr(x.created_at,1,10) < ?`)
-    .get(start, end).v;
+    WHERE x.kind = 'refund' AND ${xe.sql} >= ? AND ${xe.sql} < ?`)
+    .get(...xe.args, start, ...xe.args, end).v;
   // 團購券在核銷當天沒有現金進來（平台月結才撥款），所以只記淨收待撥，不進 total
+  const ve = bizExpr('v.used_at');
   const voucherNet = db.prepare(`SELECT COALESCE(SUM(v.net_receivable),0) AS v FROM vouchers v
-    WHERE v.status IN ('used','settled') AND substr(v.used_at,1,10) >= ? AND substr(v.used_at,1,10) < ?`)
-    .get(start, end).v;
+    WHERE v.status IN ('used','settled') AND v.used_at <> ''
+      AND ${ve.sql} >= ? AND ${ve.sql} < ?`).get(...ve.args, start, ...ve.args, end).v;
   return {
     ticket_cash: yuan(tk), topup: yuan(topup), pass_sale: yuan(pass),
     voucher_net: yuan(voucherNet),

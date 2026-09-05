@@ -10,7 +10,7 @@
 //
 // 這裡刻意不重新計算每一鐘的％：那些數字在結帳當下就定案了。
 // 這個模組只做加總與級距，所以「改了抽成設定，上個月的薪資不會變」。
-const { db, monthRange, money, yuan, today, nowStamp, audit } = require('./db');
+const { db, monthRange, money, yuan, today, nowStamp, audit, bizExpr } = require('./db');
 const { tierFor } = require('./commission');
 
 // 一位技師在某個月的業績明細
@@ -47,13 +47,21 @@ function stats(therapistId, period) {
       AND ${dateExpr} >= ? AND ${dateExpr} < ?`).get(therapistId, start, end);
 
   // 預收銷售：儲值與次卡。抽成在成交當下算好（wallet_txns.comm_amount）。
+  //
+  // 期間一律用**營業日**，跟服務業績同一個口徑。用日曆日的話，24 小時店在凌晨賣的卡
+  // 會算進下個月的薪水，而同一時刻做的鐘算這個月 —— 技師拿到薪資單會問
+  // 「我那天晚上賣的卡跑到哪去了」，而那是解釋不完的。
+  const we = bizExpr('created_at');
   const wal = db.prepare(`
     SELECT COALESCE(SUM(amount),0) AS amount, COALESCE(SUM(comm_amount),0) AS comm, COUNT(*) AS cnt
     FROM wallet_txns WHERE therapist_id = ? AND kind = 'topup'
-      AND substr(created_at,1,10) >= ? AND substr(created_at,1,10) < ?`).get(therapistId, start, end);
+      AND ${we.sql} >= ? AND ${we.sql} < ?`).get(therapistId, ...we.args, start, ...we.args, end);
+  // 次卡用 created_at 而不是 buy_date：buy_date 是日曆日，凌晨賣的卡會掛到隔天
+  const pe = bizExpr('created_at');
   const pss = db.prepare(`
     SELECT COALESCE(SUM(price_paid),0) AS amount, COUNT(*) AS cnt
-    FROM passes WHERE sold_by = ? AND buy_date >= ? AND buy_date < ?`).get(therapistId, start, end);
+    FROM passes WHERE sold_by = ? AND ${pe.sql} >= ? AND ${pe.sql} < ?`)
+    .get(therapistId, ...pe.args, start, ...pe.args, end);
   const prepaidPct = require('./db').num('prepaid_commission_pct', 5);
   const passComm = yuan(yuan(pss.amount) * prepaidPct / 100);
 
@@ -166,18 +174,21 @@ function breakdown(therapistId, period) {
     WHERE i.therapist_id = ? AND t.therapist_id <> i.therapist_id AND t.status = 'done'
       AND ${dateExpr} >= ? AND ${dateExpr} < ?
     ORDER BY at`).all(therapistId, start, end);
+  // 明細的期間口徑要跟上面的加總完全一樣，否則「攤開來看」跟總數會對不起來
+  const we2 = bizExpr('w.created_at'), pe2 = bizExpr('p.created_at');
   const prepaidRows = db.prepare(`
     SELECT w.id, w.created_at AS at, w.amount, w.comm_amount, m.name AS customer, 'topup' AS kind
     FROM wallet_txns w LEFT JOIN members m ON m.id = w.member_id
     WHERE w.therapist_id = ? AND w.kind = 'topup'
-      AND substr(w.created_at,1,10) >= ? AND substr(w.created_at,1,10) < ?
+      AND ${we2.sql} >= ? AND ${we2.sql} < ?
     UNION ALL
-    SELECT p.id, p.buy_date AS at, p.price_paid AS amount,
+    SELECT p.id, p.created_at AS at, p.price_paid AS amount,
            ROUND(p.price_paid * ? / 100, 2) AS comm_amount, m.name AS customer, 'pass' AS kind
     FROM passes p LEFT JOIN members m ON m.id = p.member_id
-    WHERE p.sold_by = ? AND p.buy_date >= ? AND p.buy_date < ?
-    ORDER BY at`).all(therapistId, start, end,
-      require('./db').num('prepaid_commission_pct', 5), therapistId, start, end);
+    WHERE p.sold_by = ? AND ${pe2.sql} >= ? AND ${pe2.sql} < ?
+    ORDER BY at`).all(therapistId, ...we2.args, start, ...we2.args, end,
+      require('./db').num('prepaid_commission_pct', 5),
+      therapistId, ...pe2.args, start, ...pe2.args, end);
   return { tickets, others, prepaid: prepaidRows, summary: preview(therapistId, period) };
 }
 
