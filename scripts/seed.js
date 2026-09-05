@@ -317,15 +317,22 @@ for (let d = DAYS; d >= 0; d--) {
       // 營業日：凌晨的單算前一天，跟正式流程用同一個函數
       const biz = bizDate(start);
       const no = nextSerial('T', biz);
+      // 今天有三成的單留成「已預約」（還沒上鐘），讓輪鐘檯與看板上有東西可看。
+      const status = d === 0 && chance(0.3) ? 'booked' : 'done';
+      // 已預約的單**還沒發生**，所以不能有實際開始／結束時間。
+      // 填了會出事：這種單日後被結帳時，actual_end 是「現在」，
+      // 而 actual_start 是預約的未來時段 —— 結束時間比開始時間還早。
+      const actualStart = status === 'done' ? start : '';
+      const actualEnd = status === 'done' ? addMinutes(start, svc.minutes) : '';
       const id = db.prepare(`INSERT INTO tickets(ticket_no,store_id,member_id,guest_name,pax,therapist_id,room_id,
         service_id,service_name,minutes,start_at,end_at,biz_date,actual_start,actual_end,assign_type,designate_fee,
         status,source,amount,list_amount,price_tier,retail_amount,discount,net_amount,created_by)
         VALUES(?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,'系統')`)
         .run(no, storeId, member?.id || null, member ? '' : '現場客',
           th.id, room.id, svc.id, svc.name, svc.minutes, start, addMinutes(start, svc.minutes), biz,
-          start, addMinutes(start, svc.minutes),
+          actualStart, actualEnd,
           designated ? 'designated' : 'rotation', fee,
-          d === 0 && chance(0.3) ? 'booked' : 'done',
+          status,
           pick(['現場', '電話', 'LINE', '官網', '回頭客', '團購平台']),
           pr.price, pr.list, pr.tier, discount, Math.max(0, pr.price + fee - discount)).lastInsertRowid;
 

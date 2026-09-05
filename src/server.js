@@ -1,10 +1,10 @@
-process.env.TZ = process.env.TZ || 'Asia/Taipei';   // 全站時間基準：台北（詳見 src/db.js 開頭說明）
+process.env.TZ = process.env.RELAXCARE_TZ || 'Asia/Taipei';   // 全站時間基準：台北（詳見 src/db.js 開頭說明）
 
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const bcrypt = require('bcryptjs');
-const { db, audit, getSetting, UI_TEXT_KEYS, today, nowStamp, bizDate } = require('./db');
+const { db, audit, getSetting, UI_TEXT_KEYS, today, nowStamp, fmtDate, bizDate } = require('./db');
 const {
   STAFF_COOKIE, signToken, setAuthCookie, clearAuthCookie,
   requireStaff, parsePermissions, parseReadonly, MODULE_KEYS, rateLimit,
@@ -219,8 +219,8 @@ function rollStatuses() {
 async function dailyMaintenance() {
   try {
     fs.mkdirSync(BACKUP_DIR, { recursive: true });
-    const s = new Date();
-    const name = `relaxcare-${s.getFullYear()}-${String(s.getMonth() + 1).padStart(2, '0')}-${String(s.getDate()).padStart(2, '0')}.db`;
+    // 檔名用營業日期（台北）。用 toISOString() 會變成 UTC，凌晨的備份會掛到前一天。
+    const name = `relaxcare-${fmtDate()}.db`;
     const dest = path.join(BACKUP_DIR, name);
     if (!fs.existsSync(dest)) {
       await db.backup(dest);

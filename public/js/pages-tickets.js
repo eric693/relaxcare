@@ -24,7 +24,7 @@ const Tickets = {
       ${UI.select('assign_type', '指派方式', twOpts(TW.assign_type), { value: t.assign_type || 'rotation', plain: true })}
       ${UI.select('therapist_id', '技師', App.therapistOptions(), { value: t.therapist_id || '', full: true })}
       ${UI.select('room_id', '床位／包廂', App.roomOptions(), { value: t.room_id || '', full: true })}
-      ${UI.input('start_at', '開始時間', { type: 'datetime-local', value: UI.toLocalInput(t.start_at || `${UI.today()} ${new Date().getHours()}:00`) })}
+      ${UI.input('start_at', '開始時間', { type: 'datetime-local', value: UI.toLocalInput(t.start_at || `${UI.today()} ${UI.hourNow()}:00`) })}
       ${UI.input('minutes', '時長（分鐘，留空用項目預設）', { type: 'number', value: t.minutes || '' })}
       ${UI.input('discount', '折扣金額', { type: 'number', value: t.discount || 0 })}
       ${UI.textarea('note', '備註', { rows: 2, value: t.note || '' })}

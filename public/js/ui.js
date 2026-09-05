@@ -356,11 +356,33 @@ const UI = {
     return `<a class="btn tiny secondary" href="${UI.esc(url)}" target="_blank" rel="noopener">${UI.esc(text)}</a>`;
   },
 
+  // ---- 跟伺服器對時 ----
+  //
+  // 全站的時間基準是台北（伺服器固定 TZ=Asia/Taipei）。但畫面上的「今天」原本是問
+  // 瀏覽器要的 —— 櫃檯平板的時區設錯、或時鐘慢了幾分鐘，預設篩選就會落在別的日期，
+  // 使用者看到的是「昨天的輪鐘檯」，然後來說系統壞了。
+  //
+  // 存的是「伺服器與本機的差值」而不是伺服器當下的日期：頁面開著過午夜也還是對的。
+  clockSkew: 0,
+  syncClock(serverNow) {
+    if (!serverNow) return;
+    // 伺服器給的是 'YYYY-MM-DD HH:MM'（台北時間）。把它跟本機當下的時間比，
+    // 差值就是「本機時鐘 + 時區」相對於台北的偏移。
+    const m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/.exec(String(serverNow));
+    if (!m) return;
+    const server = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]).getTime();
+    UI.clockSkew = server - Date.now();
+  },
+  now() { return new Date(Date.now() + UI.clockSkew); },
+
   today() {
-    const d = new Date();
+    const d = UI.now();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   },
+  // 現在幾點（依伺服器時間），開單畫面的預設時段用它
+  hourNow() { return UI.now().getHours(); },
   thisMonth() { return UI.today().slice(0, 7); },
+  // 純日期加減：兩端都走 UTC，所以與時區無關（不要改成本地時間，會在夏令時間出錯）
   addDays(dateStr, n) {
     const d = new Date(dateStr + 'T00:00:00Z');
     d.setUTCDate(d.getUTCDate() + n);

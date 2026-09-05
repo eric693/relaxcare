@@ -21,8 +21,14 @@ const App = {
 
   onUnauthorized() { if (App.me) { App.me = null; App.renderLogin(); } },
 
-  async loadShared() { App.opt = await GET('/options').catch(() => ({ lists: {} })); },
-  async refreshOptions() { App.opt = await GET('/options').catch(() => App.opt); },
+  async loadShared() {
+    App.opt = await GET('/options').catch(() => ({ lists: {} }));
+    UI.syncClock(App.opt.server_now);      // 畫面上的「今天」以伺服器為準
+  },
+  async refreshOptions() {
+    App.opt = await GET('/options').catch(() => App.opt);
+    UI.syncClock(App.opt.server_now);
+  },
 
   // ---- 下拉選項小工具 ----
   optionsOf(list, { all, none, label = 'name', value = 'id' } = {}) {

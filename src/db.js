@@ -2,7 +2,14 @@
 // 與 Node 的 new Date() 都會慢 8 小時 —— 深夜到凌晨的鐘單（按摩店最忙的時段之一）
 // 會被記成前一天，當日輪鐘、日結、抽成全部錯一天。
 // 這行必須在 require('better-sqlite3') 之前，SQLite 的 localtime 是啟動時讀 TZ 決定的。
-process.env.TZ = process.env.TZ || 'Asia/Taipei';
+//
+// 注意這裡**不看環境變數 TZ**，而是自己指定。
+// 原本寫的是 `process.env.TZ || 'Asia/Taipei'`，意思是「部署環境說了算」——
+// 但部署環境的 TZ 常常是別人（容器映像、systemd、pm2 的父行程）順手設的，
+// 沒有人會意識到它會把整套系統的營業日推移八小時。而這套系統從營業日、日結、
+// 輪鐘到薪資都以台北為前提，本來就不該讓環境「順便」改掉它。
+// 真的要換時區請明確設定 RELAXCARE_TZ，那是一個有人特意打出來的決定。
+process.env.TZ = process.env.RELAXCARE_TZ || 'Asia/Taipei';
 
 const path = require('path');
 const fs = require('fs');
@@ -305,14 +312,20 @@ function audit(actorType, actorId, actorName, action) {
 
 const pad = n => String(n).padStart(2, '0');
 
-function today() {
-  const d = new Date();
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+// 把一個 JS Date 格式化成全站通用的 'YYYY-MM-DD HH:MM'（台北時間）。
+//
+// **不要用 toISOString()**：它永遠輸出 UTC，完全不理會 process.env.TZ。
+// 這個陷阱很難發現，因為它不會報錯，只會讓畫面上的時間早 8 小時 ——
+// 而且深夜的紀錄會連日期都退一天。曾經在「備份與檔案」頁真的發生過：
+// 檔名寫著 09-05，畫面卻顯示 09-04 16:00。
+function fmtStamp(d = new Date()) {
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+    + ` ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
-function nowStamp() {
-  const d = new Date();
-  return `${today()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
+function fmtDate(d = new Date()) { return fmtStamp(d).slice(0, 10); }
+
+function today() { return fmtDate(); }
+function nowStamp() { return fmtStamp(); }
 function thisMonth() { return today().slice(0, 7); }
 
 // 'YYYY-MM-DD HH:MM' → 營業日。
@@ -397,6 +410,6 @@ module.exports = {
   db, SECRET, ensureColumns,
   getSetting, setSetting, setSettingDefault, num, getList, LIST_KEYS, UI_TEXT_KEYS, levelRates,
   audit, nextSerial,
-  today, nowStamp, thisMonth, bizDate, bizRange, toMinutes, fromMinutes, addMinutes, shiftDate, addMonths,
+  today, nowStamp, fmtStamp, fmtDate, thisMonth, bizDate, bizRange, toMinutes, fromMinutes, addMinutes, shiftDate, addMonths,
   dateDiff, minutesBetween, fmtDuration, monthRange, overlaps, money, yuan
 };

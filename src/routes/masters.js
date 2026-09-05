@@ -26,6 +26,10 @@ router.get('/options', requireStaff(), (req, res) => {
     staff: db.prepare("SELECT id,name FROM users WHERE active = 1 ORDER BY name").all(),
     level_rates: levelRates(),
     voucher_platforms: require('../db').getSetting('voucher_platforms', '').split('\n').map(x => x.trim()).filter(Boolean),
+    // 伺服器的「現在」。前端拿它跟自己的時鐘對時 ——
+    // 櫃檯平板的時區設錯或時鐘不準時，畫面上的「今天」不能跟著錯。
+    server_now: require('../db').nowStamp(),
+    server_date: require('../db').today(),
     business_day_start: require('../db').getSetting('business_day_start', '04:00'),
     board_hours: Number(require('../db').getSetting('board_hours', '24')) || 24,
     lists

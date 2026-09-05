@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const bcrypt = require('bcryptjs');
 const { db, audit, getSetting, setSetting, getList, LIST_KEYS, UI_TEXT_KEYS, today, nowStamp,
-  nextSerial, yuan, thisMonth, monthRange } = require('../db');
+  fmtStamp, nextSerial, yuan, thisMonth, monthRange } = require('../db');
 const { requireStaff, requireAny, requireAdmin, MODULES, MODULE_GROUPS, MODULE_KEYS, parsePermissions } = require('../auth');
 const notify = require('../notify');
 const rotation = require('../rotation');
@@ -235,7 +235,8 @@ function backupList() {
   if (!fs.existsSync(BACKUP_DIR)) return [];
   return fs.readdirSync(BACKUP_DIR).filter(f => BACKUP_RE.test(f)).sort().reverse().map(f => {
     const st = fs.statSync(path.join(BACKUP_DIR, f));
-    return { name: f, bytes: st.size, mtime: new Date(st.mtimeMs).toISOString().replace('T', ' ').slice(0, 16) };
+    // 用 fmtStamp 而不是 toISOString()：後者永遠輸出 UTC，會讓畫面上的時間比檔名早 8 小時
+    return { name: f, bytes: st.size, mtime: fmtStamp(new Date(st.mtimeMs)) };
   });
 }
 
@@ -327,8 +328,7 @@ router.post('/users/:id/reset-code', requireStaff('users'), (req, res) => {
   let code = '';
   for (const b of require('crypto').randomBytes(8)) code += alphabet[b % alphabet.length];
   const minutes = 30;
-  const expires = new Date(Date.now() + minutes * 60000);
-  const expiresAt = `${expires.getFullYear()}-${String(expires.getMonth() + 1).padStart(2, '0')}-${String(expires.getDate()).padStart(2, '0')} ${String(expires.getHours()).padStart(2, '0')}:${String(expires.getMinutes()).padStart(2, '0')}`;
+  const expiresAt = fmtStamp(new Date(Date.now() + minutes * 60000));
   // 舊的未使用代碼一律作廢，免得同時有兩組能用
   db.prepare("UPDATE password_resets SET used_at = ? WHERE user_id = ? AND used_at = ''")
     .run(nowStamp(), u.id);
