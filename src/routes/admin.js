@@ -246,7 +246,8 @@ router.get('/backups', requireStaff('backup'), (req, res) => {
     rows: backupList(),
     live_bytes: fs.existsSync(DB_PATH) ? fs.statSync(DB_PATH).size : 0,
     // 附件檔案的健康狀況一起報：備份頁是唯一會有人主動來看「東西還在不在」的地方
-    files: storage.verifyAll({ limit: 1000 })
+    files: storage.verifyAll({ limit: 1000 }),
+    orphans: storage.orphanFiles()
   });
 });
 

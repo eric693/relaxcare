@@ -234,4 +234,12 @@ router.get('/files-check', requireStaff('backup'), (req, res) => {
   res.json({ ...r, orphans: storage.orphanFiles() });
 });
 
+// 清掉沒有任何資料指向的檔案。這是刪除客人的照片，所以要明確送出 confirm。
+router.post('/files-purge', requireStaff('backup'), (req, res) => {
+  if (!req.body || req.body.confirm !== true) {
+    return res.json(storage.purgeOrphans({ dryRun: true }));
+  }
+  res.json(storage.purgeOrphans({ dryRun: false, actor: actorOf(req) }));
+});
+
 module.exports = router;

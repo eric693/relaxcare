@@ -7,7 +7,10 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "seed": "node scripts/seed.js",
-    "test": "node scripts/consistency-test.js",
+    "test": "node scripts/consistency-test.js && node scripts/upload-test.js",
+    "test:consistency": "node scripts/consistency-test.js",
+    "test:upload": "node scripts/upload-test.js",
+    "test:concurrency": "node scripts/concurrency-test.js",
     "e2e": "node scripts/e2e-test.js"
   },
   "dependencies": {

@@ -33,6 +33,21 @@ db.exec(`DELETE FROM consents; DELETE FROM point_txns; DELETE FROM password_rese
   DELETE FROM notifications; DELETE FROM members; DELETE FROM retail_products; DELETE FROM services;
   DELETE FROM rooms; DELETE FROM therapists; DELETE FROM stores; DELETE FROM serials;`);
 
+// 清掉 uploads/ 裡的檔案。只刪資料列會留下一堆沒人認領的照片與簽名檔 ——
+// 那是客人的個資，而且每跑一次 seed 就多留一批。
+{
+  const fs = require('fs');
+  const path = require('path');
+  const dir = path.join(__dirname, '..', 'data', 'uploads');
+  if (fs.existsSync(dir)) {
+    let n = 0;
+    for (const f of fs.readdirSync(dir)) {
+      try { fs.unlinkSync(path.join(dir, f)); n++; } catch { /* 忽略 */ }
+    }
+    if (n) console.log(`  清除附件檔案 ${n} 個`);
+  }
+}
+
 // ---- 分店 ----
 const stores = [
   // 實際的按摩連鎖多半是 24 小時或營業到凌晨，這裡刻意兩種都放，

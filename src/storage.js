@@ -64,9 +64,35 @@ const MAGIC = {
   'image/webp': b => b.slice(0, 4).toString('latin1') === 'RIFF' && b.slice(8, 12).toString('latin1') === 'WEBP',
   'application/pdf': b => b.slice(0, 5).toString('latin1') === '%PDF-'
 };
+
+// 檔尾檢查：檔案**完整地**結束了嗎？
+//
+// 只驗檔頭會漏掉最常見的一種壞檔 —— 傳到一半斷線。前幾個位元組完好無缺，
+// 所以檔頭檢查照樣通過，存進去卻是一張只有上半截的照片。
+// 這種檔案的可怕之處在於它「看起來成功了」：縮圖甚至可能顯示得出上半部，
+// 要等到有人把它放大、或列印同意書時才發現下半截是灰的。
+//
+// 這幾種格式都有明確的結束標記，驗它就能把截斷的檔案擋在門外：
+const TRAILER = {
+  // PNG 以 IEND 區塊結尾（最後 8 位元組固定是 IEND + CRC）
+  'image/png': b => b.length > 12 && b.slice(-8, -4).toString('latin1') === 'IEND',
+  // JPEG 以 FFD9（EOI）結尾。有些相機會在後面補幾個位元組，所以往回找一小段。
+  'image/jpeg': b => b.slice(-32).includes(Buffer.from([0xFF, 0xD9])),
+  // GIF 以 0x3B（trailer）結尾
+  'image/gif': b => b[b.length - 1] === 0x3B,
+  // WebP 的 RIFF 標頭第 4~8 位元組寫著「後面還有多少」，對不上就是被截斷了
+  'image/webp': b => b.length >= 12 && b.readUInt32LE(4) === b.length - 8,
+  // PDF 以 %%EOF 結尾，後面可能有換行
+  'application/pdf': b => b.slice(-1024).toString('latin1').includes('%%EOF')
+};
+
 function checkMagic(mime, buf) {
-  const fn = MAGIC[mime];
-  if (fn && !fn(buf)) throw new Error(`檔案內容不像 ${mime}，可能已損壞或副檔名被改過`);
+  const head = MAGIC[mime];
+  if (head && !head(buf)) throw new Error(`檔案內容不像 ${mime}，可能已損壞或副檔名被改過`);
+  const tail = TRAILER[mime];
+  if (tail && !tail(buf)) {
+    throw new Error('檔案不完整（可能在上傳過程中斷線），請重新上傳');
+  }
 }
 
 // 寫入 → fsync → 回讀比對。回傳實際落盤的檔名。
@@ -176,13 +202,31 @@ function verifyAll({ limit = 5000 } = {}) {
   return { checked: rows.length, bad, ok: bad.length === 0 };
 }
 
-// 沒有任何資料列指向、卻還躺在 uploads/ 裡的檔案（存檔中途失敗留下的殘骸）
+// 沒有任何資料列指向、卻還躺在 uploads/ 裡的檔案。
+//
+// 來源有兩種：存檔中途失敗留下的殘骸（正常情況下 writeVerified 會自己清掉），
+// 以及「資料列被刪了、檔案沒刪」—— 例如重跑 `npm run seed` 會清空 attachments 資料表。
+// 這些檔案不影響功能，但它們是客人的照片與同意書簽名，**留著就是留著個資**，
+// 而且會讓「備份與檔案」頁的數字愈來愈難看。
 function orphanFiles() {
   const known = new Set(db.prepare('SELECT stored_name FROM attachments').all().map(r => r.stored_name));
-  return fs.readdirSync(UPLOAD_DIR).filter(f => !known.has(f));
+  return fs.readdirSync(UPLOAD_DIR).filter(f => !known.has(f) && !f.endsWith('.part'));
+}
+
+// 清掉孤兒檔案。預設只是列出來（dryRun），真的要刪要明講 ——
+// 這些是客人的照片，誤刪沒有第二次機會。
+function purgeOrphans({ dryRun = true, actor = '' } = {}) {
+  const files = orphanFiles();
+  if (dryRun) return { files, deleted: 0, dry_run: true };
+  let deleted = 0;
+  for (const f of files) {
+    try { fs.unlinkSync(path.join(UPLOAD_DIR, f)); deleted++; } catch { /* 已不在 */ }
+  }
+  if (deleted) audit('staff', null, actor || '', `清除無主附件檔案 ${deleted} 個`);
+  return { files, deleted, dry_run: false };
 }
 
 module.exports = {
   UPLOAD_DIR, MIME_EXT, MAX_BYTES, OWNER_TYPES,
-  save, get, listFor, read, remove, verifyAll, orphanFiles, pathOf, sha256, parseDataUrl
+  save, get, listFor, read, remove, verifyAll, orphanFiles, purgeOrphans, pathOf, sha256, parseDataUrl
 };

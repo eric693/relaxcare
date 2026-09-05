@@ -414,6 +414,7 @@ App.page('backup', {
         <div class="toolbar">
           <button class="btn" id="bk-now">立即備份</button>
           <button class="btn secondary" id="bk-check">重新檢查檔案</button>
+          <button class="btn secondary" id="bk-purge">清除無主檔案</button>
         </div>
         <div class="stat-grid">
           <div class="stat"><div class="stat-label">目前資料庫</div>
@@ -423,7 +424,13 @@ App.page('backup', {
           <div class="stat ${f.ok ? 'ok' : 'warn'}"><div class="stat-label">上傳檔案</div>
             <div class="stat-value">${f.checked - f.bad.length} / ${f.checked}</div>
             <div class="stat-sub">${f.ok ? '全部通過指紋驗證' : `${f.bad.length} 個檔案有問題`}</div></div>
+          ${d.orphans && d.orphans.length ? `<div class="stat warn"><div class="stat-label">無主檔案</div>
+            <div class="stat-value">${d.orphans.length}</div>
+            <div class="stat-sub">沒有任何資料指向它們</div></div>` : ''}
         </div>
+        ${d.orphans && d.orphans.length ? `<div class="notice warn">有 ${d.orphans.length} 個檔案躺在磁碟上、
+          卻沒有任何資料列指向它們（多半是重建示範資料留下的）。它們是客人的照片與簽名，
+          留著就是留著個資，建議清掉。</div>` : ''}
         ${f.ok ? '' : `<div class="notice danger"><b>⛔ 有檔案損壞或遺失：</b><br>
           ${f.bad.map(b => `#${b.id} ${UI.esc(b.filename || '')}：${UI.esc(b.problem)}`).join('<br>')}
           <br>這些檔案要重新上傳。同意書簽名若在這份名單裡，請盡快請客人重簽。</div>`}
@@ -448,6 +455,22 @@ App.page('backup', {
         const r = await GET('/files-check');
         UI.toast(r.ok ? `檢查了 ${r.checked} 個檔案，全部正常` : `${r.bad.length} 個檔案有問題`, !r.ok);
         draw();
+      };
+      body.querySelector('#bk-purge').onclick = async () => {
+        const pre = await POST('/files-purge', {});
+        if (!pre.files.length) return UI.toast('沒有無主檔案，不必清理');
+        UI.modal({
+          title: '清除無主檔案', submitText: '確認刪除',
+          body: `<div class="notice danger">要刪掉 <b>${pre.files.length}</b> 個檔案。
+              它們沒有任何資料列指向，但**檔案本身是刪不回來的** ——
+              請先確認這不是資料庫剛還原、資料列還沒對上的暫時狀態。</div>
+            <div class="muted" style="max-height:160px;overflow:auto">${pre.files.slice(0, 50).map(UI.esc).join('<br>')}</div>`,
+          async onSubmit() {
+            const r = await POST('/files-purge', { confirm: true });
+            UI.toast(`已刪除 ${r.deleted} 個無主檔案`);
+            draw();
+          }
+        });
       };
       body.querySelectorAll('[data-restore]').forEach(b => b.onclick = () => {
         const name = b.dataset.restore;
