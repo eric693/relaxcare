@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>系統介紹｜RelaxCare 按摩／SPA 連鎖營運管理系統</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <meta name="theme-color" content="#5b4b8a">
+  <style>
+    .intro { max-width: 940px; margin: 0 auto; padding: 28px 20px 60px; }
+    .intro h1 { font-size: 30px; color: var(--primary-dark); }
+    .intro .lead { font-size: 17px; color: var(--muted); margin: 8px 0 26px; line-height: 1.8; }
+    .intro section { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 20px 22px; margin-bottom: 16px; box-shadow: var(--shadow); }
+    .intro h2 { font-size: 20px; color: var(--primary-dark); margin-bottom: 6px; }
+    .intro h3 { margin: 14px 0 4px; }
+    .intro p, .intro li { line-height: 1.85; }
+    .intro ul { margin: 6px 0 6px 20px; }
+    .intro .why { background: var(--primary-light); border-radius: 8px; padding: 10px 14px; margin: 10px 0; font-size: 14.5px; }
+    .intro .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; margin-top: 10px; }
+    .intro .grid > div { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+    .intro .grid b { color: var(--primary-dark); }
+    .intro .cta { text-align: center; margin-top: 26px; }
+  </style>
+</head>
+<body>
+<div class="intro">
+  <h1>RelaxCare</h1>
+  <div class="lead">
+    按摩、SPA、整復連鎖店的營運管理系統。<br>
+    這套系統處理的是別的行業沒有的三件事：<b>輪鐘制的公平性</b>、<b>抽成分潤的正確性</b>、<b>預收款的負債管理</b>。
+  </div>
+
+  <section>
+    <h2>一、輪鐘檯：把「今天為什麼是他先上」講清楚</h2>
+    <p>技師的收入直接取決於今天輪到幾次，所以輪序是這行最容易吵架的地方。規則本身很單純，難的是例外。</p>
+    <div class="why">
+      輪序 =（已輪次數，簽到順序）由小到大。先比輪次、再比簽到 ——
+      這樣「輪過的人自動排到隊尾」不必真的去搬動號碼，補簽到的人插進來也不會亂。
+    </div>
+    <ul>
+      <li><b>指名預設不吃輪</b>：紅牌被指名做完回來，還是排在原本的位置。否則指名多的技師會被指名指到接不到輪鐘，實際上是變相減薪。這個行為可在設定改。</li>
+      <li><b>休息是暫離輪序，不是下班</b>：吃飯、抽菸、身體不適登記休息，時間到自動回到輪序 —— 現場沒有人會記得按「恢復」。</li>
+      <li><b>每一次異動都留痕跡</b>：簽到、指派、被跳過、人工調整全部寫進輪序軌跡，人工調整還必須填原因。店長口頭喬的結果沒有人會記得，系統寫下來的會。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>二、抽成分潤：算薪水不再是老闆的惡夢</h2>
+    <p>薪水 = 底薪 ＋ 服務抽成（指名／輪鐘不同％）＋ 商品抽成 ＋ 指名費 ＋ 預收銷售抽成 ＋ 業績級距獎金 ＋ 加項 － 扣項。</p>
+    <div class="why">
+      抽成在<b>結帳當下</b>算好寫死在單據上，不是到月底才回頭套「現在的％」。
+      抽成比例調過一次，過去的薪資就全部對不起來，而技師記得自己上個月領多少。
+    </div>
+    <ul>
+      <li>％的優先順序：服務項目自訂 → 技師自訂 → 級別預設。個別談定的條件不會被級別設定蓋掉。</li>
+      <li>加鐘可以指定由別的技師接手，那一筆的抽成就算給那個人。</li>
+      <li>級距獎金只看服務業績，不含商品與預收 —— 否則會變成鼓勵只賣卡不做鐘。</li>
+      <li>薪資單可以攤開到每一張鐘單。技師來問「這個月怎麼只有這樣」，點開就有答案。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>三、預收負債：儲值與次卡是負債，不是收入</h2>
+    <p>客人儲值兩萬，那天的現金流是兩萬，但收入是零 —— 你欠他兩萬塊的服務。</p>
+    <div class="why">
+      現金部位與贈送部位<b>分開存</b>。退款只退未使用的現金，贈送金一律作廢。
+      混在一起算，遇到「儲值 2 萬送 3 千、用掉 5 千後要退款」就會退錯錢。
+    </div>
+    <ul>
+      <li>扣款一律先扣贈送金：會過期的先用掉，對客人有利，帳面負債也降得快。</li>
+      <li>次卡的單次價值用「實付 ÷ 總次數」攤，不是原價 —— 用原價攤會讓卡在用完前就把負債沖光。</li>
+      <li>退卡提供兩種算法（按實付單價退未使用次數／已使用次數按原價扣回），畫面上同時試算讓你選。</li>
+      <li>營業稅試算會把預收排除在當期銷售額外，客人實際消費時才認列。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>四、上鐘前的閘門：一次把該擋的事情檢查完</h2>
+    <p>現場開單的人很忙，不會主動去翻客人的健康紀錄，所以檢查必須發生在按下開單的那一刻，而且要一次講完。</p>
+    <div class="grid">
+      <div><b>時間重疊</b><br>同一位技師不可能同時做兩個人；床位同理（足療區可設定同時容納多組）。</div>
+      <div><b>健康禁忌</b><br>客人勾選的身體狀況若屬於該服務的禁忌（孕婦做精油、服抗凝血劑做拔罐），直接擋下。</div>
+      <div><b>證照與健檢</b><br>技術士證或健康檢查過期的技師不能上鐘。稽查時看的就是這兩張紙。</div>
+      <div><b>輪序提醒</b><br>輪鐘單指派給非排頭的人時會告訴你現在應該輪到誰。</div>
+      <div><b>付款可行性</b><br>儲值餘額不足、次卡過期或不屬於這位客人，結帳前就講。</div>
+      <div><b>強制放行要留理由</b><br>現場總有必須放行的時候，但理由會寫在單子上與稽核軌跡裡。</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>五、民俗調理業的合規自檢</h2>
+    <p>按摩、推拿、腳底按摩屬於民俗調理業，不是醫療院所：不得從事醫療行為，也不得宣稱醫療效能。
+      實務上被檢舉的多半不是手法，是<b>文案</b>。</p>
+    <ul>
+      <li>掃描服務項目、商品與對外文案，找出「治療」「療效」「根治」「整脊」等踩線字詞，指出在哪一筆資料的哪個欄位。</li>
+      <li>系統不會自動改文案（改壞了更糟），只把問題攤開來給店長決定。</li>
+      <li>要發出去的廣告文案可以先貼進來檢查。</li>
+      <li>客人同意書與問診紀錄的完整度另有一張表 —— 訪查時「拿不出紀錄」跟「沒有做」一樣麻煩。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>其他模組</h2>
+    <div class="grid">
+      <div><b>排鐘看板</b><br>技師與床位的橫向時間軸，一眼看出哪裡塞得下。</div>
+      <div><b>客人檔案</b><br>力道偏好、禁忌部位、身體狀況與消費歷程。換技師接手時最實用的交接資料。</div>
+      <div><b>回購名單</b><br>久未回店的客人，有儲值餘額或未用完次卡的會標出來 —— 那是最該請回來的一群。</div>
+      <div><b>營運損益</b><br>現金流入、服務營收、預收負債三組數字分開算，含床位使用率與技師排行。</div>
+      <div><b>出勤與工時</b><br>在店時間、上鐘時間、上鐘率。長期低於三成通常是排班過剩。</div>
+      <div><b>線上預約</b><br>官網送來的申請先落在待處理清單，門市確認才開成鐘單。</div>
+      <div><b>客訴與異常</b><br>含技師的輪序爭議，搭配輪序軌跡就有證據。</div>
+      <div><b>權限與稽核</b><br>每個模組逐一授權，還能設成「只能看不能改」；重要操作全部留稽核軌跡。</div>
+      <div><b>日結與交班</b><br>系統算應有現金、你點鈔輸入面額，短溢自動出來且必須留下說明 —— 不是把數字改到一樣。</div>
+      <div><b>收據列印</b><br>結帳按一次就印，上面有付款拆解、儲值餘額與次卡剩餘次數。客人事後爭議時拿得出來。</div>
+      <div><b>班表</b><br>預排下週誰上什麼班，可複製上一週；還會比對「排了班沒簽到」與「沒排班卻來上班」。</div>
+      <div><b>進退貨與盤點</b><br>庫存有流水了：進貨、退貨、盤點差異、跨店調撥，成本用移動加權平均，商品毛利算得出來。</div>
+      <div><b>發票與折讓</b><br>登錄實際開出去的號碼，作廢與折讓分得清楚，月底對得回申報書。</div>
+      <div><b>集點與介紹人</b><br>消費自動累點，兌換換成儲值贈送金（不折鐘單，才不會扣到技師的抽成）。</div>
+      <div><b>電子同意書</b><br>客人當場在平板上簽名，連同當下的健康狀況一起存成快照，日後改資料也不影響已簽的那份。</div>
+      <div><b>備份與檔案</b><br>手動備份、下載、還原；上傳的照片與簽名每天重驗指紋，壞掉會主動報出來。</div>
+    </div>
+  </section>
+
+  <div class="cta">
+    <a class="btn" href="/">進入系統</a>
+    　<a class="btn secondary" href="/book.html">看看線上預約頁</a>
+  </div>
+</div>
+</body>
+</html>

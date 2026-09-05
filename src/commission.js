@@ -10,6 +10,11 @@
 //   3. 級別預設（settings 的 level_rates）
 const { db, levelRates, num, money, yuan } = require('./db');
 
+// 抽成一律進位到整數元。
+// 算到小數會讓「薪資頁的加總」與「損益頁的加總」永遠差個幾毛 —— 兩邊各自四捨五入的位置不同。
+// 差幾毛在帳上沒差，但技師與會計會看到兩個不一樣的數字，而那是解釋不完的。
+const comm = n => yuan(n);
+
 // 取得某位技師在某個服務項目上的實際抽成％與指名費
 function ratesFor(therapist, service) {
   const lv = levelRates()[therapist?.level] || { normal: 0, designated: 0, retail: 0, fee: 0 };
@@ -58,7 +63,7 @@ function computeTicket(ticket, items = []) {
     const prod = i.ref_id ? db.prepare('SELECT * FROM retail_products WHERE id = ?').get(i.ref_id) : null;
     const sellerRates = ratesFor(seller, null);
     const p = Number(prod?.pct_retail) > 0 ? Number(prod.pct_retail) : sellerRates.retail;
-    const amt = money(yuan(i.amount) * p / 100);
+    const amt = comm(yuan(i.amount) * p / 100);
     commRetail += amt;
     detail.push({ item_id: i.id, kind: 'retail', name: i.name, base: yuan(i.amount), pct: p, amount: amt,
       therapist_id: i.therapist_id || ticket.therapist_id });
@@ -71,26 +76,26 @@ function computeTicket(ticket, items = []) {
     const other = therapistOf(i.therapist_id);
     const orates = ratesFor(other, svc);
     const p = designated ? orates.designated : orates.normal;
-    const amt = money(yuan(i.amount) * p / 100);
+    const amt = comm(yuan(i.amount) * p / 100);
     commOther += amt;
     detail.push({ item_id: i.id, kind: 'service', name: i.name, base: yuan(i.amount), pct: p, amount: amt,
       therapist_id: i.therapist_id });
   }
 
-  const commService = money(serviceBase * pct / 100);
+  const commService = comm(serviceBase * pct / 100);
   // 指名費：向客人加收多少（ticket.designate_fee）與技師實拿多少（r.fee）是兩件事。
   // 有些店加收 100 但只給技師 50，差額是店裡的。
-  const commDesignate = designated ? money(r.fee) : 0;
+  const commDesignate = designated ? comm(r.fee) : 0;
 
   return {
     pct_used: pct,
     rates: r,
     service_base: serviceBase,
     comm_service: commService,
-    comm_retail: money(commRetail),
-    comm_other: money(commOther),
+    comm_retail: comm(commRetail),
+    comm_other: comm(commOther),
     comm_designate: commDesignate,
-    total: money(commService + commRetail + commDesignate),
+    total: comm(commService) + comm(commRetail) + comm(commDesignate),
     detail: [{ item_id: null, kind: 'service', name: ticket.service_name || '主項服務',
       base: serviceBase, pct, amount: commService, therapist_id: ticket.therapist_id }].concat(detail)
   };
@@ -110,7 +115,7 @@ function tierFor(level, monthAmount) {
 // 且要另外標記 —— 客人退款時抽成是否追回，是店裡的政策，系統至少要查得到是誰銷的。
 function prepaidCommission(amount, therapistId) {
   const pct = num('prepaid_commission_pct', 5);
-  return { pct, amount: money(yuan(amount) * pct / 100), therapist_id: therapistId || null };
+  return { pct, amount: comm(yuan(amount) * pct / 100), therapist_id: therapistId || null };
 }
 
 module.exports = { ratesFor, computeTicket, tierFor, prepaidCommission, therapistOf, serviceOf };

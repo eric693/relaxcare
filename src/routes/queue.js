@@ -77,7 +77,7 @@ router.get('/attendance', requireAny('attendance', 'queue', 'payroll'), (req, re
     LEFT JOIN stores st ON st.id = s.store_id
     WHERE s.work_date >= ? AND s.work_date <= ? AND (? IS NULL OR s.store_id = ?)
     ORDER BY s.work_date DESC, s.queue_seq`).all(from, to, sid, sid);
-  const dateExpr = "substr(COALESCE(NULLIF(t.actual_start,''), t.start_at),1,10)";
+  const dateExpr = 't.biz_date';
   const stats = db.prepare(`
     SELECT ${dateExpr} AS d, t.therapist_id,
            COUNT(*) AS tickets,

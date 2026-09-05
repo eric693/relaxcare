@@ -4,7 +4,7 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const bcrypt = require('bcryptjs');
-const { db, audit, getSetting, UI_TEXT_KEYS, today, nowStamp } = require('./db');
+const { db, audit, getSetting, UI_TEXT_KEYS, today, nowStamp, bizDate } = require('./db');
 const {
   STAFF_COOKIE, signToken, setAuthCookie, clearAuthCookie,
   requireStaff, parsePermissions, parseReadonly, MODULE_KEYS, rateLimit,
@@ -16,7 +16,9 @@ const loginRateLimit = rateLimit({ windowMs: 5 * 60 * 1000, max: 30, prefix: 'lo
 const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', 1);   // 服務跑在 nginx 後面，要靠轉發標頭判斷 https 與來源 IP
-app.use(express.json({ limit: '2mb' }));
+// 上傳照片走 JSON base64（單檔上限 8MB，base64 會膨脹約 1/3），所以放寬到 12MB。
+// 真正的檔案大小限制在 storage.js 裡把關，不是靠這個數字。
+app.use(express.json({ limit: '12mb' }));
 app.use(express.urlencoded({ extended: false }));
 
 // 安全標頭。CSP 只允許同源資源，所以前端一律用自己的 JS／CSS，不吃 CDN。
@@ -64,6 +66,28 @@ app.post('/api/login', loginRateLimit, (req, res) => {
   res.json({ id: user.id, name: user.name, role: user.role });
 });
 
+// 忘記密碼：管理員在「帳號權限」頁產生一次性代碼，當事人在登入頁用它改密碼。
+// 這支不需要登入，所以跟登入共用同一組限流。
+app.post('/api/password-reset', loginRateLimit, (req, res) => {
+  const { username, code, new_password } = req.body || {};
+  const fail = () => res.status(400).json({ error: '代碼不正確或已失效，請向管理員重新索取' });
+  const user = db.prepare('SELECT * FROM users WHERE username = ? AND active = 1').get(username || '');
+  if (!user) return fail();
+  if (!new_password || String(new_password).length < 6) {
+    return res.status(400).json({ error: '新密碼至少 6 碼' });
+  }
+  const rows = db.prepare(`SELECT * FROM password_resets WHERE user_id = ? AND used_at = ''
+    ORDER BY id DESC LIMIT 5`).all(user.id);
+  const now = nowStamp();
+  const hit = rows.find(r => r.expires_at >= now && bcrypt.compareSync(String(code || ''), r.code_hash));
+  if (!hit) return fail();
+  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?')
+    .run(bcrypt.hashSync(String(new_password), 10), user.id);
+  db.prepare('UPDATE password_resets SET used_at = ? WHERE id = ?').run(now, hit.id);
+  audit('staff', user.id, user.name, '以重設代碼變更自己的密碼');
+  res.json({ ok: true });
+});
+
 app.post('/api/logout', (req, res) => {
   clearAuthCookie(res, STAFF_COOKIE, req);
   res.json({ ok: true });
@@ -99,7 +123,10 @@ app.use('/api', require('./routes/masters'));
 app.use('/api', require('./routes/queue'));
 app.use('/api', require('./routes/tickets'));
 app.use('/api', require('./routes/prepaid'));
+app.use('/api', require('./routes/vouchers'));
 app.use('/api', require('./routes/reports'));
+app.use('/api', require('./routes/inventory'));
+app.use('/api', require('./routes/ops'));
 app.use('/api', require('./routes/admin'));
 
 // ---- 靜態檔案 ----
@@ -115,10 +142,18 @@ app.use(express.static(path.join(__dirname, '..', 'public'), {
 
 app.use('/api', (req, res) => res.status(404).json({ error: '找不到此 API' }));
 
+// 錯誤處理。
+//
+// 業務規則的錯誤（「庫存不足」「短溢超過容忍值」「這張卡已經退過了」）是丟例外出來的，
+// 它們是使用者做錯事，不是系統壞了 —— 回 500 會讓前端顯示成「系統發生錯誤」，
+// 使用者就不知道自己該改什麼。所以只有真正的程式錯誤與資料庫錯誤才算 500。
+const BUG_ERRORS = new Set(['TypeError', 'ReferenceError', 'RangeError', 'SyntaxError']);
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
-  console.error(err);
-  res.status(500).json({ error: err && err.message ? err.message : '系統發生錯誤，請稍後再試' });
+  const isBug = !err || !err.message || BUG_ERRORS.has(err.name) || err.name === 'SqliteError';
+  if (isBug) console.error(err);
+  res.status(err && err.status ? err.status : isBug ? 500 : 400)
+    .json({ error: isBug ? '系統發生錯誤，請稍後再試' : err.message });
 });
 
 // ---- 每日維護：備份、資料保留、狀態推進、贈送金到期 ----
@@ -142,11 +177,27 @@ function sweepBackupDir(dir) {
 // 沒有人會回頭去把昨天忘記結的單點掉，所以狀態要自己往前走：
 // 過了時間還停在「已預約」的單視為未到；還停在「服務中」的單自動結束（金額照原本的算）。
 function rollStatuses() {
-  const t = today();
+  // 用營業日比較：24 小時店的凌晨還在「昨天」的班上，不該被當成過期未到
+  const t = bizDate();
+  // 標記未到之前先把商品還回架上。
+  //
+  // 預約單也可能先賣了商品（客人先來拿貨、晚點再做），加項的當下庫存就扣掉了。
+  // 人工取消走 /tickets/:id/cancel 會回沖，但這裡是系統自己標記的 ——
+  // 漏掉就會變成「客人沒來、東西也沒賣出去，架上卻少一件」，而且永遠查不出是哪一天少的。
+  const inventory = require('./inventory');
+  const noshow = db.prepare("SELECT * FROM tickets WHERE status = 'booked' AND biz_date < ?").all(t);
+  for (const tk of noshow) {
+    for (const i of db.prepare("SELECT * FROM ticket_items WHERE ticket_id = ? AND kind = 'retail'").all(tk.id)) {
+      if (!i.ref_id) continue;
+      try {
+        inventory.sellVoid({ productId: i.ref_id, storeId: tk.store_id, qty: i.qty, ticketId: tk.id,
+          note: `${tk.ticket_no} 系統標記未到，商品回沖`, actor: '系統' });
+      } catch (e) { console.error(`未到回沖失敗（${tk.ticket_no} ${i.name}）：`, e.message); }
+    }
+  }
   db.prepare(`UPDATE tickets SET status = 'noshow', note = TRIM(note || ' ｜系統標記未到')
-              WHERE status = 'booked' AND substr(start_at,1,10) < ?`).run(t);
-  const stale = db.prepare(`SELECT * FROM tickets WHERE status = 'serving'
-                            AND substr(COALESCE(NULLIF(actual_start,''), start_at),1,10) < ?`).all(t);
+              WHERE status = 'booked' AND biz_date < ?`).run(t);
+  const stale = db.prepare(`SELECT * FROM tickets WHERE status = 'serving' AND biz_date < ?`).all(t);
   for (const s of stale) {
     db.prepare(`UPDATE tickets SET status = 'done', actual_end = COALESCE(NULLIF(actual_end,''), end_at),
                 note = TRIM(note || ' ｜系統自動結束（未於當日結帳）') WHERE id = ?`).run(s.id);
@@ -188,7 +239,23 @@ async function dailyMaintenance() {
     const nkeep = Number(getSetting('notify_retention_days', '180'));
     if (nkeep > 0) db.prepare("DELETE FROM notifications WHERE created_at < datetime('now','localtime',?)").run(`-${nkeep} days`);
     rollStatuses();
+    // 附件完整性：壞掉的檔案要在還救得回來的時候被發現，而不是等到要調同意書的那天。
+    try {
+      const fileCheck = require('./storage').verifyAll({ limit: 2000 });
+      if (!fileCheck.ok) {
+        console.error(`附件完整性檢查：${fileCheck.bad.length} 個檔案有問題`);
+        for (const b of fileCheck.bad.slice(0, 10)) console.error(`  · #${b.id} ${b.filename}：${b.problem}`);
+        audit('staff', null, '系統', `附件完整性檢查發現 ${fileCheck.bad.length} 個問題檔案`);
+      }
+    } catch (e) { console.error('附件完整性檢查失敗：', e.message); }
+    // 庫存快取與流水對帳（只報告不自動修，庫存自己變了要有人知道）
+    try {
+      const inv = require('./inventory').reconcile({});
+      if (!inv.ok) console.error(`庫存快取與流水不符：${inv.mismatched.length} 項，請到進退貨與盤點頁重算`);
+    } catch (e) { console.error('庫存對帳失敗：', e.message); }
     const expired = require('./prepaid').expireBonus();
+    const voidVouchers = require('./vouchers').expireOld();
+    if (voidVouchers) console.log(`團購券過期：${voidVouchers} 張`);
     if (expired) console.log(`贈送金到期作廢：${expired} 位客人`);
   } catch (e) { console.error('每日維護作業失敗：', e.message); }
 }

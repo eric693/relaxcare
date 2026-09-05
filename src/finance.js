@@ -18,7 +18,9 @@ function storeFilter(storeId, alias = 't') {
 // 期間內完成的鐘單彙總
 function serviceRevenue(start, end, storeId) {
   const f = storeFilter(storeId);
-  const dateExpr = "substr(COALESCE(NULLIF(t.actual_start,''), t.start_at),1,10)";
+  // 統計一律用營業日欄位，不從時間字串截日期 ——
+  // 24 小時營業的店，凌晨兩點那一鐘要算給前一天的生意。
+  const dateExpr = 't.biz_date';
   const r = db.prepare(`
     SELECT COUNT(*) AS tickets,
            COALESCE(SUM(t.minutes),0) AS minutes,
@@ -30,6 +32,8 @@ function serviceRevenue(start, end, storeId) {
            COALESCE(SUM(t.paid_cash),0) AS paid_cash,
            COALESCE(SUM(t.paid_wallet),0) AS paid_wallet,
            COALESCE(SUM(t.paid_pass),0) AS paid_pass,
+           COALESCE(SUM(t.paid_voucher),0) AS paid_voucher,
+           COALESCE(SUM(t.list_amount),0) AS list_total,
            COALESCE(SUM(t.comm_service + t.comm_retail + t.comm_designate),0) AS commission,
            SUM(CASE WHEN t.assign_type = 'designated' THEN 1 ELSE 0 END) AS designated_tickets
     FROM tickets t
@@ -40,6 +44,10 @@ function serviceRevenue(start, end, storeId) {
     retail: yuan(r.retail), designate_fee: yuan(r.designate_fee),
     revenue: yuan(r.net), commission: yuan(r.commission),
     paid_cash: yuan(r.paid_cash), paid_wallet: yuan(r.paid_wallet), paid_pass: yuan(r.paid_pass),
+    paid_voucher: yuan(r.paid_voucher),
+    list_total: yuan(r.list_total),
+    // 實收 ÷ 牌價。低於 0.7 通常代表折扣給得太兇，或團購券佔比過高。
+    realization: r.list_total ? yuan(r.net) / yuan(r.list_total) : 0,
     designated_tickets: r.designated_tickets || 0
   };
 }
@@ -47,7 +55,7 @@ function serviceRevenue(start, end, storeId) {
 // 期間內實際收到的現金（鐘單現金 + 儲值 + 賣卡 - 退款）
 function cashFlow(start, end, storeId) {
   const f = storeFilter(storeId);
-  const dateExpr = "substr(COALESCE(NULLIF(t.actual_start,''), t.start_at),1,10)";
+  const dateExpr = 't.biz_date';
   const tk = db.prepare(`SELECT COALESCE(SUM(t.paid_cash),0) AS v FROM tickets t
     WHERE t.status = 'done' AND ${dateExpr} >= ? AND ${dateExpr} < ?${f.sql}`).get(start, end, ...f.args).v;
   const wf = storeId ? ' AND w.store_id = ?' : '';
@@ -64,8 +72,13 @@ function cashFlow(start, end, storeId) {
   const passRefund = db.prepare(`SELECT COALESCE(SUM(x.amount),0) AS v FROM pass_txns x
     WHERE x.kind = 'refund' AND substr(x.created_at,1,10) >= ? AND substr(x.created_at,1,10) < ?`)
     .get(start, end).v;
+  // 團購券在核銷當天沒有現金進來（平台月結才撥款），所以只記淨收待撥，不進 total
+  const voucherNet = db.prepare(`SELECT COALESCE(SUM(v.net_receivable),0) AS v FROM vouchers v
+    WHERE v.status IN ('used','settled') AND substr(v.used_at,1,10) >= ? AND substr(v.used_at,1,10) < ?`)
+    .get(start, end).v;
   return {
     ticket_cash: yuan(tk), topup: yuan(topup), pass_sale: yuan(pass),
+    voucher_net: yuan(voucherNet),
     wallet_refund: yuan(refund), pass_refund: yuan(passRefund),
     total: yuan(tk + topup + pass - refund - passRefund)
   };
@@ -102,7 +115,7 @@ function monthly(period, storeId) {
 // 每日趨勢（給圖表用）
 function daily(start, end, storeId) {
   const f = storeFilter(storeId);
-  const dateExpr = "substr(COALESCE(NULLIF(t.actual_start,''), t.start_at),1,10)";
+  const dateExpr = 't.biz_date';
   return db.prepare(`
     SELECT ${dateExpr} AS d, COUNT(*) AS tickets,
            COALESCE(SUM(t.net_amount),0) AS revenue,
@@ -114,7 +127,7 @@ function daily(start, end, storeId) {
 // 技師業績排行
 function therapistRank(start, end, storeId) {
   const f = storeFilter(storeId);
-  const dateExpr = "substr(COALESCE(NULLIF(t.actual_start,''), t.start_at),1,10)";
+  const dateExpr = 't.biz_date';
   return db.prepare(`
     SELECT th.id, th.name, th.level, th.code,
            COUNT(*) AS tickets,
@@ -132,7 +145,7 @@ function therapistRank(start, end, storeId) {
 // 服務項目排行
 function serviceRank(start, end, storeId) {
   const f = storeFilter(storeId);
-  const dateExpr = "substr(COALESCE(NULLIF(t.actual_start,''), t.start_at),1,10)";
+  const dateExpr = 't.biz_date';
   return db.prepare(`
     SELECT t.service_name AS name, COUNT(*) AS tickets,
            COALESCE(SUM(t.amount),0) AS amount, COALESCE(SUM(t.minutes),0) AS minutes
@@ -149,7 +162,7 @@ function roomUsage(start, end, storeId) {
   const open = store?.open_time || '10:00', close = store?.close_time || '23:00';
   const openMin = (Number(close.slice(0, 2)) * 60 + Number(close.slice(3, 5)))
     - (Number(open.slice(0, 2)) * 60 + Number(open.slice(3, 5)));
-  const dateExpr = "substr(COALESCE(NULLIF(t.actual_start,''), t.start_at),1,10)";
+  const dateExpr = 't.biz_date';
   const used = db.prepare(`SELECT t.room_id, COALESCE(SUM(t.minutes),0) AS m, COUNT(*) AS c
     FROM tickets t WHERE t.status = 'done' AND t.room_id IS NOT NULL
       AND ${dateExpr} >= ? AND ${dateExpr} < ? GROUP BY t.room_id`).all(start, end);

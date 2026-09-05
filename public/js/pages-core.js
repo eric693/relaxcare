@@ -19,9 +19,10 @@ App.page('dashboard', {
   async render(el) {
     const d = await GET('/dashboard');
     const a = d.alerts, t = d.today, m = d.month;
-    const card = (label, value, sub, cls = '') =>
+    // 數字型的值用等寬數字不換行；「0 上鐘 / 0 等鐘」這種句子型的值改用小一號字並允許換行
+    const card = (label, value, sub, cls = '', text = false) =>
       `<div class="stat ${cls}"><div class="stat-label">${UI.esc(label)}</div>
-        <div class="stat-value">${value}</div><div class="stat-sub">${sub || ''}</div></div>`;
+        <div class="stat-value${text ? ' text' : ''}">${value}</div><div class="stat-sub">${sub || ''}</div></div>`;
     const alert = (n, label, hash) => n
       ? `<a class="badge-alert" href="#${hash}">${UI.esc(label)} <b>${n}</b></a>` : '';
 
@@ -33,7 +34,10 @@ App.page('dashboard', {
       alert(a.open_issues, '未結案客訴', 'issues'),
       alert(a.expiring_passes, '次卡 30 天內到期', 'liability'),
       alert(a.repurchase, '待回訪客人', 'repurchase'),
-      alert(a.low_stock, '商品低於安全庫存', 'retail')
+      alert(a.low_stock, '商品低於安全庫存', 'purchase'),
+      alert(a.unclosed_days, '營業日未日結', 'closing'),
+      alert(a.missing_invoices, '已結帳未開發票', 'invoices'),
+      alert(a.consent_missing, '同意書未簽或逾期', 'compliance')
     ].filter(Boolean).join('');
 
     el.innerHTML = `
@@ -41,9 +45,9 @@ App.page('dashboard', {
         ${card('今日鐘數', UI.fmtNum(t.tickets), `指名 ${t.designated_tickets} 鐘・服務 ${UI.dur(t.minutes)}`)}
         ${card('今日服務營收', UI.fmtMoney(t.revenue), `技師抽成 ${UI.fmtMoney(t.commission)}`)}
         ${card('今日現金流入', UI.fmtMoney(t.cash.total), `含儲值 ${UI.fmtMoney(t.cash.topup)}・售卡 ${UI.fmtMoney(t.cash.pass_sale)}`)}
-        ${card('檯面', `${t.serving} 上鐘 / ${t.waiting} 等鐘`, `在班 ${t.on_duty} 人・預約待到 ${t.booked} 組`)}
+        ${card('檯面', `${t.serving} 上鐘 ／ ${t.waiting} 等鐘`, `在班 ${t.on_duty} 人・預約待到 ${t.booked} 組`, '', true)}
         ${card('下一位輪鐘', t.next ? UI.esc(t.next.name) : '—',
-          t.next ? `第 ${t.next.queue_seq} 號・今日已輪 ${t.next.rounds} 次` : '目前沒有人在等鐘', t.next ? 'ok' : '')}
+          t.next ? `第 ${t.next.queue_seq} 號・今日已輪 ${t.next.rounds} 次` : '目前沒有人在等鐘', t.next ? 'ok' : '', true)}
         ${card('本月服務營收', UI.fmtMoney(m.revenue), `${m.tickets} 鐘・抽成 ${UI.fmtMoney(m.commission)}`)}
         ${card('本月費用', UI.fmtMoney(m.expenses), `毛利 ${UI.fmtMoney(m.revenue - m.commission - m.expenses)}`)}
         ${card('預收負債', UI.fmtMoney(d.liability.total_cash_liability),
@@ -63,12 +67,27 @@ App.page('dashboard', {
             <td class="num">${UI.fmtMoney(r.amount)}</td></tr>`))}</div>
       </div>`;
 
-    document.getElementById('dash-charts').innerHTML = Charts.bars({
-      title: '近 30 天營收與鐘數',
-      data: d.trend.map(x => ({ label: x.d.slice(5), values: [x.revenue, x.tickets * 1000] })),
-      series: ['服務營收', '鐘數（×1000 以便同軸比較）'],
-      note: '鐘數乘以 1000 只是為了跟金額放在同一個座標軸上看趨勢，不是金額。'
-    });
+    // 營收與鐘數是兩種單位，硬塞進同一個座標軸只能靠「乘以 1000」這種把戲，
+    // 看的人得先在心裡除回去 —— 不如分成兩張圖，各自用自己的刻度。
+    const days = d.trend.length;
+    const totalTickets = d.trend.reduce((s, x) => s + x.tickets, 0);
+    const avgRevenue = days ? Math.round(d.trend.reduce((s, x) => s + x.revenue, 0) / days) : 0;
+    document.getElementById('dash-charts').innerHTML =
+      Charts.bars({
+        title: '近 30 天服務營收',
+        data: d.trend.map(x => ({ label: x.d.slice(5).replace('-', '/'), values: [x.revenue] })),
+        series: ['服務營收'],
+        note: `日均 ${UI.fmtMoney(avgRevenue)}，期間共 ${UI.fmtNum(totalTickets)} 鐘。日期標籤會依寬度自動疏化，滑過長條看單日數字。`
+      })
+      + Charts.bars({
+        title: '近 30 天鐘數',
+        data: d.trend.map(x => ({ label: x.d.slice(5).replace('-', '/'), values: [x.tickets] })),
+        series: ['鐘數'], fmt: v => `${UI.fmtNum(v)} 鐘`, height: 220
+      })
+      + Charts.hbars({
+        title: '本月技師服務業績', colorByIndex: true,
+        data: d.top_therapists.map(t => ({ label: t.name, value: t.service_amount }))
+      });
   }
 });
 

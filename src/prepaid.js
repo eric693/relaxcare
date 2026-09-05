@@ -95,6 +95,24 @@ const refundConsume = db.transaction(({ memberId, ticketId, note, actor }) => {
   return { cash, bonus, total: cash + bonus };
 });
 
+// 只發贈送金，不動現金部位。點數兌換與補償（客訴、久候致歉）走這裡。
+//
+// 走 topup 是錯的：topup 的 amount 會被損益的現金流入認列，等於帳上憑空多出一筆收入，
+// 而點數兌換根本沒有人付錢進來。贈送金本來就不列為預收負債，這樣三張表都還是對的。
+const grantBonus = db.transaction(({ memberId, bonus, months, note, actor }) => {
+  const bn = yuan(bonus);
+  if (bn <= 0) throw new Error('贈送金額要大於 0');
+  const w = wallet(memberId);
+  const m = months === undefined ? num('wallet_bonus_expire_months', 12) : Number(months);
+  const expiry = m > 0 ? addMonths(today(), m) : w.expiry_date;
+  const bonusAfter = money(w.bonus_balance + bn);
+  writeWallet(memberId, w.cash_balance, bonusAfter, expiry);
+  wtxn({ member_id: memberId, kind: 'adjust', cash_delta: 0, bonus_delta: bn, amount: 0,
+    cash_after: money(w.cash_balance), bonus_after: bonusAfter,
+    note: note || `贈送金 ${bn} 元`, actor: actor || '' });
+  return walletBalance(memberId);
+});
+
 // 退款。只退未使用的現金部位，贈送金作廢。手續費依設定％。
 const refund = db.transaction(({ memberId, amount, storeId, note, actor }) => {
   const w = wallet(memberId);
@@ -155,10 +173,30 @@ const expireBonus = db.transaction(() => {
 function passOf(id) { return db.prepare('SELECT * FROM passes WHERE id = ?').get(id); }
 
 function passUnitValue(p) {
-  // 單次價值：以實付金額攤平（不是原價）。核銷認列營收與退卡計算都用這個數字，
-  // 用原價攤會讓「買 10 送 2」的卡在用完前就把負債沖光。
+  // 單次價值：以實付金額攤平（不是原價）。用原價攤會讓「買 10 送 2」的卡在用完前
+  // 就把負債沖光。這個數字只用來顯示與估算，實際核銷金額請用 passUsedValue。
   const times = Number(p.total_times) || 1;
   return money(yuan(p.price_paid) / times);
+}
+
+// 用掉 n 次時，累計應該認列多少。
+//
+// 為什麼不是「單次價值 × 次數」：14390 元買 12 次，一次是 1199.1666…，
+// 四捨五入成 1199.17 再乘回 12 次會變成 14390.04 —— 比客人付的錢還多 4 分。
+// 反過來取 1199 則會少 2 元。這種零頭會卡在預收負債裡永遠沖不掉。
+// 改成算「累計值的差」：每一次核銷的金額是 round(實付×已用/總次數) 的增量，
+// 全部用完時加總剛好等於實付，一分不差。
+function passUsedValue(p, times) {
+  const total = Number(p.total_times) || 1;
+  return yuan(yuan(p.price_paid) * Math.min(times, total) / total);
+}
+// 這一次核銷（從 before 用到 after）該認列多少
+function passStepValue(p, before, after) {
+  return passUsedValue(p, after) - passUsedValue(p, before);
+}
+// 還沒用掉的價值 —— 這就是這張卡在預收負債表上的金額
+function passRemainValue(p) {
+  return yuan(p.price_paid) - passUsedValue(p, p.used_times);
 }
 
 function passStatus(p) {
@@ -176,7 +214,7 @@ function ptxn(row) {
 }
 
 const buyPass = db.transaction(({ memberId, serviceId, name, totalTimes, pricePaid, listValue,
-                                  expiryDate, soldBy, storeId, transferable = 1, note, actor }) => {
+                                  expiryDate, soldBy, storeId, transferable = 1, payMethod, note, actor }) => {
   const times = Number(totalTimes) || 0;
   if (times <= 0) throw new Error('次數要大於 0');
   const svc = serviceId ? db.prepare('SELECT * FROM services WHERE id = ?').get(serviceId) : null;
@@ -185,11 +223,12 @@ const buyPass = db.transaction(({ memberId, serviceId, name, totalTimes, pricePa
   const lv = yuan(listValue) || (svc ? yuan(svc.price) * times : 0);
   const no = nextSerial('PC');
   const info = db.prepare(`INSERT INTO passes(pass_no,member_id,store_id,service_id,name,total_times,
-                            price_paid,list_value,buy_date,expiry_date,transferable,sold_by,note)
-                           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+                            price_paid,list_value,buy_date,expiry_date,transferable,sold_by,pay_method,note)
+                           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
     .run(no, memberId, storeId || null, serviceId || null,
       name || (svc ? `${svc.name} ${times} 次卡` : `${times} 次卡`),
-      times, yuan(pricePaid), lv, today(), exp, transferable ? 1 : 0, soldBy || null, note || '');
+      times, yuan(pricePaid), lv, today(), exp, transferable ? 1 : 0, soldBy || null,
+      payMethod || '現金', note || '');
   ptxn({ pass_id: info.lastInsertRowid, member_id: memberId, kind: 'buy', times,
     amount: yuan(pricePaid), used_after: 0, note: `購買 ${no}`, actor: actor || '' });
   return passOf(info.lastInsertRowid);
@@ -207,7 +246,7 @@ const usePass = db.transaction(({ passId, ticketId, times = 1, note, actor }) =>
     throw new Error(`剩餘次數不足：尚餘 ${p.total_times - p.used_times} 次，要核銷 ${n} 次`);
   }
   const used = p.used_times + n;
-  const value = money(passUnitValue(p) * n);
+  const value = passStepValue(p, p.used_times, used);
   db.prepare(`UPDATE passes SET used_times = ?, status = ? WHERE id = ?`)
     .run(used, used >= p.total_times ? 'used_up' : 'active', passId);
   ptxn({ pass_id: passId, member_id: p.member_id, kind: 'use', times: -n, amount: value,
@@ -242,8 +281,10 @@ function refundQuote(passId, mode = 'unit') {
   const remain = p.total_times - p.used_times;
   const unit = passUnitValue(p);
   const listUnit = p.total_times ? money(yuan(p.list_value) / p.total_times) : 0;
-  const byUnit = money(unit * remain);                                   // 按實付單價退未使用次數
-  const byList = money(Math.max(0, yuan(p.price_paid) - listUnit * p.used_times)); // 已用部分按原價扣回
+  // 用「實付 − 已使用的累計值」而不是「單價 × 剩餘次數」，理由同 passUsedValue：
+  // 除不盡的卡（14390 買 12 次）用乘法會退得比客人付的還多。
+  const byUnit = passRemainValue(p);                                     // 按實付單價退未使用次數
+  const byList = yuan(Math.max(0, yuan(p.price_paid) - listUnit * p.used_times)); // 已用部分按原價扣回
   const feePct = num('wallet_refund_fee_pct', 0);
   const base = mode === 'list' ? byList : byUnit;
   const fee = yuan(base * feePct / 100);
@@ -313,24 +354,23 @@ function liability(storeId) {
                           AND (? IS NULL OR m.store_id = ?)`).get(storeId || null, storeId || null);
   const passes = db.prepare(`SELECT * FROM passes WHERE status = 'active'
                              AND (? IS NULL OR store_id = ?)`).all(storeId || null, storeId || null);
-  let passRemainValue = 0, passRemainTimes = 0;
+  let passValue = 0, passRemainTimes = 0;
   for (const p of passes) {
     if (passStatus(p) !== 'active') continue;
-    const remain = p.total_times - p.used_times;
-    passRemainTimes += remain;
-    passRemainValue += passUnitValue(p) * remain;
+    passRemainTimes += p.total_times - p.used_times;
+    passValue += passRemainValue(p);
   }
   return {
     wallet_cash: yuan(w.cash), wallet_bonus: yuan(w.bonus), wallet_members: w.members,
-    pass_count: passes.length, pass_remain_times: passRemainTimes, pass_value: yuan(passRemainValue),
+    pass_count: passes.length, pass_remain_times: passRemainTimes, pass_value: yuan(passValue),
     // 贈送金不是真的收到的錢，習慣上不列為負債；這裡分開列，要不要含進去由會計決定
-    total_cash_liability: yuan(w.cash + passRemainValue),
-    total_with_bonus: yuan(w.cash + w.bonus + passRemainValue)
+    total_cash_liability: yuan(w.cash + passValue),
+    total_with_bonus: yuan(w.cash + w.bonus + passValue)
   };
 }
 
 module.exports = {
-  wallet, walletBalance, topup, consume, refundConsume, refund, transfer, expireBonus,
-  passOf, passUnitValue, passStatus, buyPass, usePass, voidPassUse, refundQuote, refundPass,
+  wallet, walletBalance, topup, consume, refundConsume, refund, transfer, expireBonus, grantBonus,
+  passOf, passUnitValue, passUsedValue, passStepValue, passRemainValue, passStatus, buyPass, usePass, voidPassUse, refundQuote, refundPass,
   transferPass, extendPass, activePasses, liability
 };

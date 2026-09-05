@@ -106,6 +106,7 @@ const App = {
           <div class="login-err" id="lg-err"></div>
           ${t.ui_demo_hint ? `<div style="margin-top:14px;padding:12px;background:var(--primary-light);border-radius:8px;font-size:13px;line-height:1.8">${UI.esc(t.ui_demo_hint).replace(/\n/g, '<br>')}</div>` : ''}
           <div style="margin-top:14px;font-size:13px;text-align:center">
+            <a href="#" id="lg-forgot">忘記密碼</a>　·　
             <a href="/intro.html">系統功能介紹</a>　·　<a href="/book.html">官網線上預約頁</a></div>
         </div>
       </div>`;
@@ -120,18 +121,37 @@ const App = {
         location.reload();
       } catch (e) { err.textContent = e.message; }
     };
+    // 忘記密碼：沒有 email 也沒有簡訊，所以走「向管理員要一次性代碼、自己在這裡改」。
+    document.getElementById('lg-forgot').onclick = e => {
+      e.preventDefault();
+      UI.modal({
+        title: '忘記密碼', submitText: '設定新密碼',
+        body: `<div class="notice">請向管理員索取「密碼重設代碼」（管理員在「帳號權限」頁按重設密碼即可產生，
+            30 分鐘內有效、只能用一次），拿到之後在這裡設定新密碼。</div>
+          <div class="form-grid">
+            ${UI.input('username', '帳號', { full: true })}
+            ${UI.input('code', '重設代碼', { full: true, placeholder: '8 碼英數' })}
+            ${UI.input('new_password', '新密碼（至少 6 碼）', { type: 'password', full: true })}
+          </div>`,
+        async onSubmit(el2) {
+          const f = UI.formData(el2);
+          await POST('/password-reset', f);
+          UI.toast('密碼已更新，請用新密碼登入');
+        }
+      });
+    };
     document.getElementById('lg-btn').onclick = doLogin;
     document.getElementById('lg-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
   },
 
   navGroups: [
-    { label: '每日作業', keys: ['dashboard', 'queue', 'board', 'tickets', 'bookings', 'issues'] },
-    { label: '客戶與預收', keys: ['members', 'wallets', 'passes', 'repurchase'] },
-    { label: '資源與商品', keys: ['therapists', 'rooms', 'services', 'retail'] },
-    { label: '薪酬', keys: ['payroll', 'commission', 'attendance'] },
-    { label: '財務', keys: ['finance', 'liability', 'expenses', 'tax'] },
-    { label: '法遵', keys: ['compliance', 'expiry'] },
-    { label: '系統', keys: ['notifications', 'stores', 'users', 'settings', 'audit'] }
+    { label: '每日作業', keys: ['dashboard', 'queue', 'board', 'tickets', 'bookings', 'closing', 'issues'] },
+    { label: '客戶與預收', keys: ['members', 'wallets', 'passes', 'vouchers', 'loyalty', 'repurchase'] },
+    { label: '資源與商品', keys: ['therapists', 'rooms', 'services', 'addons', 'retail', 'purchase'] },
+    { label: '薪酬', keys: ['payroll', 'commission', 'attendance', 'roster'] },
+    { label: '財務', keys: ['finance', 'liability', 'expenses', 'invoices'] },
+    { label: '法遵', keys: ['compliance'] },
+    { label: '系統', keys: ['notifications', 'stores', 'users', 'settings', 'audit', 'backup'] }
   ],
 
   renderLayout() {
@@ -334,6 +354,8 @@ const App = {
       assign_type: { rotation: '', designated: 'ok', assigned: 'warn' },
       shift_status: { waiting: 'ok', serving: 'warn', resting: '', off: 'danger' },
       pass_status: { active: 'ok', used_up: '', expired: 'danger', refunded: 'danger', transferred: '' },
+      voucher_status: { unused: 'ok', used: '', settled: '', expired: 'danger', void: 'danger' },
+      price_tier: { list: '', walkin: '', member: 'ok', package: 'ok', voucher: 'warn' },
       payroll_status: { draft: 'warn', confirmed: 'ok', paid: '' },
       issue_status: { open: 'danger', handling: 'warn', closed: 'ok' },
       severity: { low: '', normal: 'warn', high: 'danger' },

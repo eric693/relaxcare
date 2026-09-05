@@ -21,7 +21,7 @@ function stats(therapistId, period) {
 
   // 服務業績以「實際完成」的鐘單為準，取 actual_start（沒有就退回 start_at）落在當月的。
   // 用結帳時間會讓跨月的夜班單算到下個月，用預約時間又會把取消的單算進來。
-  const dateExpr = "substr(COALESCE(NULLIF(t.actual_start,''), t.start_at),1,10)";
+  const dateExpr = 't.biz_date';
   const tk = db.prepare(`
     SELECT COUNT(*) AS ticket_count,
            SUM(CASE WHEN t.assign_type = 'designated' THEN 1 ELSE 0 END) AS designate_count,
@@ -55,7 +55,7 @@ function stats(therapistId, period) {
     SELECT COALESCE(SUM(price_paid),0) AS amount, COUNT(*) AS cnt
     FROM passes WHERE sold_by = ? AND buy_date >= ? AND buy_date < ?`).get(therapistId, start, end);
   const prepaidPct = require('./db').num('prepaid_commission_pct', 5);
-  const passComm = money(yuan(pss.amount) * prepaidPct / 100);
+  const passComm = yuan(yuan(pss.amount) * prepaidPct / 100);
 
   const serviceAmount = yuan(tk.service_amount) + yuan(items.other_service_amount);
   const retailAmount = yuan(tk.retail_ticket_amount) + yuan(items.other_retail_amount);
@@ -64,7 +64,7 @@ function stats(therapistId, period) {
   // 級距獎金看「服務業績」，不含商品與預收 —— 商品與預收有自己的抽成，
   // 一起算會讓推銷卡的人自動升級距，變相鼓勵只賣卡不做鐘。
   const tier = tierFor(t.level, serviceAmount);
-  const tierBonus = tier ? money(serviceAmount * (tier.bonus_pct || 0) / 100) : 0;
+  const tierBonus = tier ? yuan(serviceAmount * (tier.bonus_pct || 0) / 100) : 0;
 
   return {
     therapist: t, period, start, end,
@@ -77,10 +77,10 @@ function stats(therapistId, period) {
     prepaid_amount: prepaidAmount,
     prepaid_topup: yuan(wal.amount), prepaid_topup_count: wal.cnt || 0,
     prepaid_pass: yuan(pss.amount), prepaid_pass_count: pss.cnt || 0,
-    comm_service: money(yuan(tk.comm_service) + yuan(items.other_comm_service)),
-    comm_retail: money(yuan(tk.comm_retail) + yuan(items.other_comm_retail)),
-    comm_designate: money(tk.comm_designate),
-    comm_prepaid: money(yuan(wal.comm) + passComm),
+    comm_service: yuan(tk.comm_service) + yuan(items.other_comm_service),
+    comm_retail: yuan(tk.comm_retail) + yuan(items.other_comm_retail),
+    comm_designate: yuan(tk.comm_designate),
+    comm_prepaid: yuan(wal.comm) + passComm,
     tier, tier_bonus: tierBonus,
     base_salary: yuan(t.base_salary)
   };
@@ -91,8 +91,8 @@ function preview(therapistId, period) {
   const s = stats(therapistId, period);
   // 預收抽成併入商品抽成欄位呈現，薪資單上分列說明 ——
   // 資料表不再多開欄位，是因為這兩者在薪資單上的角色一樣：「非鐘點的銷售獎金」。
-  const commRetail = money(s.comm_retail + s.comm_prepaid);
-  const total = money(s.base_salary + s.comm_service + commRetail + s.comm_designate + s.tier_bonus);
+  const commRetail = s.comm_retail + s.comm_prepaid;
+  const total = s.base_salary + s.comm_service + commRetail + s.comm_designate + s.tier_bonus;
   return { ...s, comm_retail_total: commRetail, total_before_adjust: total };
 }
 
@@ -151,7 +151,7 @@ function recalcTotal(id) {
 // 一張薪資單背後的每一筆鐘單。技師來問「這個月怎麼只有這樣」，就打開這個。
 function breakdown(therapistId, period) {
   const { start, end } = monthRange(period);
-  const dateExpr = "substr(COALESCE(NULLIF(t.actual_start,''), t.start_at),1,10)";
+  const dateExpr = 't.biz_date';
   const tickets = db.prepare(`
     SELECT t.id, t.ticket_no, t.service_name, t.minutes, t.assign_type, t.amount, t.discount,
            t.retail_amount, t.comm_service, t.comm_retail, t.comm_designate, t.comm_pct_used,

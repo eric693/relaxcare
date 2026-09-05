@@ -28,6 +28,73 @@ function ensureColumns(table, cols) {
   }
 }
 
+// ---- 24 小時營業與營業日 ----
+//
+// 森 SPA 的中山館、不老松的新生行館都是 24 小時營業，松江館是 09:00~03:00。
+// 這件事會把三個地方弄壞：排鐘看板的時間軸畫不出跨午夜的班、日結把凌晨的鐘算成隔天、
+// 技師的當日輪次在午夜歸零。
+//
+// 解法是引進「營業日」：凌晨 04:00（可設定）之前的單，仍算前一天的營業日。
+// tickets.biz_date 在開單時就算好存起來 —— 統計一律用它，不再從時間字串截前 10 碼。
+ensureColumns('tickets', {
+  biz_date: "TEXT NOT NULL DEFAULT ''"
+});
+// 舊資料補算一次：沒有 biz_date 的單先用實際開始時間的日期填上
+db.prepare(`UPDATE tickets SET biz_date = substr(COALESCE(NULLIF(actual_start,''), start_at),1,10)
+            WHERE biz_date = ''`).run();
+db.exec('CREATE INDEX IF NOT EXISTS idx_ticket_bizdate ON tickets(biz_date)');
+
+// ---- 三層定價 ----
+// 兩家實際店家都是這樣標價：牌價 2400 → 現場價 1980 → 會員價再低一點。
+// 只存一個 price 的話，「打折了多少」這件事就永遠算不出來，
+// 而那正是老闆最想知道的數字（實收 ÷ 牌價 = 折扣率）。
+ensureColumns('services', {
+  list_price: 'REAL NOT NULL DEFAULT 0',      // 牌價（原價）
+  member_price: 'REAL NOT NULL DEFAULT 0',    // 會員價（0＝同現場價）
+  is_package: 'INTEGER NOT NULL DEFAULT 0',   // 是不是組合套票
+  package_items: "TEXT NOT NULL DEFAULT ''"   // 套票內容（服務 id 以逗號分隔）
+});
+// 沒填牌價的沿用現場價，這樣折扣率的分母不會是 0
+db.prepare('UPDATE services SET list_price = price WHERE list_price = 0').run();
+
+ensureColumns('ticket_items', {
+  list_price: 'REAL NOT NULL DEFAULT 0'       // 這一項照牌價要多少（算折扣率用）
+});
+
+ensureColumns('tickets', {
+  // 這張單套用了哪一層價：list 牌價／walkin 現場價／member 會員價／package 套票／voucher 團購券
+  price_tier: "TEXT NOT NULL DEFAULT 'walkin'",
+  list_amount: 'REAL NOT NULL DEFAULT 0',     // 同樣的服務照牌價要多少（算折扣率用）
+  paid_voucher: 'REAL NOT NULL DEFAULT 0'     // 團購券折抵金額
+});
+
+// ---- 集點與介紹人 ----
+// points 是快取，point_txns 才是真相（跟儲值金同一套規矩）。
+ensureColumns('members', {
+  points: 'INTEGER NOT NULL DEFAULT 0',
+  referrer_id: 'INTEGER',                       // 誰介紹來的
+  referral_paid: 'INTEGER NOT NULL DEFAULT 0',  // 介紹獎勵發過了沒（只在首次消費發一次）
+  photo_id: 'INTEGER'                           // 大頭照（attachments.id）
+});
+
+// ---- 商品成本 ----
+// 進貨會用加權平均更新 cost，這裡記最後一次進貨的單價與日期，讓「成本怎麼變成這樣」查得到。
+ensureColumns('retail_products', {
+  last_cost: 'REAL NOT NULL DEFAULT 0',
+  last_purchase_date: "TEXT NOT NULL DEFAULT ''"
+});
+
+// ---- 次卡的收款方式 ----
+// 日結要算「進抽屜的現金」，售卡是其中一塊；沒有這個欄位就分不出這張卡是收現還是刷卡。
+ensureColumns('passes', {
+  pay_method: "TEXT NOT NULL DEFAULT ''"
+});
+
+// ---- 鐘單開立的發票 ----
+ensureColumns('tickets', {
+  invoice_id: 'INTEGER'
+});
+
 // ---- JWT 密鑰 ----
 let SECRET = process.env.JWT_SECRET || '';
 if (!SECRET) {
@@ -73,7 +140,8 @@ const LIST_KEYS = {
   member_sources: '路過\n朋友介紹\nGoogle\nFacebook\nInstagram\nLINE\n團購平台\n公司特約',
   member_tags: 'VIP\n高消費\n只做指名\n對精油過敏\n不喜歡聊天\n需要安靜\n常遲到\n奧客注意',
   ticket_sources: '現場\n電話\nLINE\n官網\n回頭客\n團購平台',
-  pay_methods: '現金\n刷卡\nLINE Pay\n街口\n悠遊卡\n匯款\n儲值扣款\n次卡核銷',
+  pay_methods: '現金\n刷卡\nLINE Pay\n街口\n悠遊卡\n匯款\n儲值扣款\n次卡核銷\n團購券',
+  addon_categories: '加購療程\n身體護理\n足部護理\n附餐茶點\n用品',
   retail_categories: '保養品\n精油\n按摩用品\n保健食品\n禮券\n其他',
   expense_categories: '房租\n水電\n用品耗材\n洗滌\n行銷廣告\n設備維修\n勞健保\n雜支',
   issue_categories: '客訴\n技師糾紛\n設備故障\n預約疏失\n收費爭議\n衛生問題\n其他',
@@ -112,6 +180,21 @@ function seedDefaults() {
   // 銷售儲值／次卡的抽成％（先收錢的業績，通常抽得比服務低）
   setSettingDefault('prepaid_commission_pct', '5');
 
+  // ---- 營業日 ----
+  // 24 小時營業的店，凌晨的客人算「前一天」的生意。這個時間點之前開的單歸前一營業日。
+  // 設 '00:00' 就是不做營業日換算（一般日班店家）。
+  setSettingDefault('business_day_start', '04:00');
+  // 排鐘看板要畫幾個小時。24 小時店設 24，一般店可設 14~16 讓格子寬一點。
+  setSettingDefault('board_hours', '24');
+
+  // ---- 定價 ----
+  // 會員價要不要自動帶：客人是會員時開單自動套用會員價
+  setSettingDefault('auto_member_price', '1');
+  // 團購券平台
+  setSettingDefault('voucher_platforms', 'Klook\nGOMAJI\nKKday\n蝦皮\n團購\n其他');
+  // 平台預設抽成％（建券時帶入，可逐張改）
+  setSettingDefault('voucher_commission_pct', '20');
+
   // ---- 營運 ----
   setSettingDefault('vat_rate', '5');
   setSettingDefault('slot_min', '15');                     // 看板時間軸的一格分鐘數
@@ -128,6 +211,53 @@ function seedDefaults() {
     '治療\n療效\n醫療\n診斷\n復健\n矯正\n根治\n痊癒\n藥效\n消炎\n止痛\n療程（改稱「服務」）\n整脊\n正骨\n推血路\n打通經絡\n排毒\n瘦身\n減肥\n豐胸\n療癒疾病');
   setSettingDefault('compliance_note',
     '民俗調理業不得從事醫療行為、不得宣稱醫療效能。文案請改用「舒緩」「放鬆」「舒壓」「調理」等描述。');
+
+  // ---- 日結與交班 ----
+  // 抽屜起始零用金（找零用）。日結的「應有現金」從這個數字開始加。
+  setSettingDefault('cash_open_float', '3000');
+  // 短溢容忍值：差額在這個金額以內只是提醒，超過要填說明。
+  // 設 0 會讓每天都在填說明（硬幣本來就會差幾塊），設太大等於沒在管。
+  setSettingDefault('cash_diff_tolerance', '50');
+  setSettingDefault('closing_shifts', '早班\n晚班\n全日');
+  // 哪些付款方式算「進抽屜的現金」。刷卡與行動支付不進抽屜，要跟收單機各自對。
+  setSettingDefault('cash_pay_methods', '現金');
+  setSettingDefault('card_pay_methods', '刷卡\nLINE Pay\n街口\n悠遊卡');
+
+  // ---- 收據 ----
+  setSettingDefault('receipt_footer', '謝謝光臨，祝您身心舒暢。\n本店為民俗調理業，服務內容不涉及醫療行為。');
+  setSettingDefault('receipt_show_therapist', '1');
+
+  // ---- 發票 ----
+  setSettingDefault('invoice_enabled', '1');
+  setSettingDefault('invoice_track', '');                  // 本期字軌，例如 AB
+  setSettingDefault('invoice_next_no', '');                // 下一個號碼（8 碼），留空＝手動輸入
+
+  // ---- 班表 ----
+  // 班別代碼與預設時間（格式：代碼=開始|結束）。「休假」不填時間。
+  setSettingDefault('roster_shifts', '早班=10:00|19:00\n中班=14:00|23:00\n晚班=16:00|01:00\n休假=|\n特休=|\n請假=|');
+
+  // ---- 集點與介紹 ----
+  setSettingDefault('points_enabled', '1');
+  // 消費多少元累 1 點。設 100 就是「每消費 100 元 1 點」。
+  setSettingDefault('points_per_amount', '100');
+  // 1 點可兌換多少元的儲值贈送金
+  setSettingDefault('point_redeem_value', '1');
+  // 兌換門檻：低於這個點數不給換（避免每次來換 3 點，櫃檯做白工）
+  setSettingDefault('point_redeem_min', '100');
+  // 介紹人獎勵點數（被介紹的新客第一次消費完成時發給介紹人）
+  setSettingDefault('referral_points', '200');
+  // 點數只認服務消費、不含商品與預收：跟級距獎金同一個道理，
+  // 否則客人買一張大卡就集滿點，等於把預收款又打了一次折。
+  setSettingDefault('points_service_only', '1');
+
+  // ---- 同意書 ----
+  setSettingDefault('consent_text',
+    '一、本人已據實告知自身健康狀況、疾病史與不適部位，並瞭解按摩／推拿等民俗調理服務不具醫療效能，'
+    + '亦非醫療行為，不能取代醫師之診斷與治療。\n'
+    + '二、服務過程中如感到不適、疼痛或力道過重，本人會立即告知技師調整或停止。\n'
+    + '三、本人同意店家為服務安全之目的，保存上述健康資訊與本同意書，並依個人資料保護法使用。');
+  // 同意書多久要重簽一次（月）。身體狀況會變，一年前簽的等於沒問。
+  setSettingDefault('consent_valid_months', '12');
 
   for (const [k, v] of Object.entries(LIST_KEYS)) setSettingDefault(k, v);
 }
@@ -184,6 +314,26 @@ function nowStamp() {
   return `${today()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 function thisMonth() { return today().slice(0, 7); }
+
+// 'YYYY-MM-DD HH:MM' → 營業日。
+// 凌晨 business_day_start 之前算前一天：24 小時店的凌晨兩點是「昨天的夜班」，
+// 那一鐘要算給昨天的日結、昨天的輪次、昨天的班表。
+function bizDate(stamp) {
+  const s = String(stamp || nowStamp());
+  const d = s.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return today();
+  const cut = getSetting('business_day_start', '04:00');
+  if (!cut || cut === '00:00') return d;
+  const hhmm = s.slice(11, 16);
+  if (!hhmm) return d;
+  return hhmm < cut ? shiftDate(d, -1) : d;
+}
+// 營業日的起訖時間點（含跨午夜）。看板的時間軸與日結的區間都用這個。
+function bizRange(dateStr) {
+  const cut = getSetting('business_day_start', '04:00');
+  if (!cut || cut === '00:00') return { start: `${dateStr} 00:00`, end: `${shiftDate(dateStr, 1)} 00:00` };
+  return { start: `${dateStr} ${cut}`, end: `${shiftDate(dateStr, 1)} ${cut}` };
+}
 
 function toMinutes(s) {
   const m = String(s || '').match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/);
@@ -247,6 +397,6 @@ module.exports = {
   db, SECRET, ensureColumns,
   getSetting, setSetting, setSettingDefault, num, getList, LIST_KEYS, UI_TEXT_KEYS, levelRates,
   audit, nextSerial,
-  today, nowStamp, thisMonth, toMinutes, fromMinutes, addMinutes, shiftDate, addMonths,
+  today, nowStamp, thisMonth, bizDate, bizRange, toMinutes, fromMinutes, addMinutes, shiftDate, addMonths,
   dateDiff, minutesBetween, fmtDuration, monthRange, overlaps, money, yuan
 };

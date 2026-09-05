@@ -83,7 +83,7 @@ function therapistText(therapistId, workDate) {
                            FROM tickets tk
                            LEFT JOIN members m ON m.id = tk.member_id
                            LEFT JOIN rooms r ON r.id = tk.room_id
-                           WHERE tk.therapist_id = ? AND substr(tk.start_at,1,10) = ?
+                           WHERE tk.therapist_id = ? AND tk.biz_date = ?
                              AND tk.status IN ('booked','serving') ORDER BY tk.start_at`).all(therapistId, d);
   const L = [`${t.name} 您好，${d} 的預約如下：`];
   if (!rows.length) L.push('（目前沒有預約）');

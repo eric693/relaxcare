@@ -81,9 +81,15 @@ function checkPayment({ memberId, serviceId, useWallet, walletAmount, passId, am
   if (useWallet && memberId) {
     const b = prepaid.walletBalance(memberId);
     const need = yuan(walletAmount || amount);
-    if (b.total < need) {
-      issues.push({ level: 'conflict', code: 'wallet_short',
-        message: `儲值餘額不足：可用 ${b.total} 元（現金 ${b.cash}／贈送 ${b.bonus}），需要 ${need} 元` });
+    // 餘額不足不是硬衝突：結帳試算本來就會「儲值抵到底、不足的收現金」。
+    // 若這裡擋下來，畫面上會出現「試算說收現金 1960、按下確定卻說餘額不足」這種自相矛盾。
+    // 只有完全沒有餘額卻勾了動用儲值，才視為選錯付款方式。
+    if (b.total <= 0) {
+      issues.push({ level: 'conflict', code: 'wallet_empty',
+        message: '這位客人沒有儲值餘額，請取消「動用儲值」或先為他儲值' });
+    } else if (b.total < need) {
+      issues.push({ level: 'warn', code: 'wallet_short',
+        message: `儲值餘額 ${b.total} 元（現金 ${b.cash}／贈送 ${b.bonus}）不足 ${need} 元，差額 ${need - b.total} 元會以現金收取` });
     } else if (b.bonus > 0 && b.expiry_date && b.expiry_date >= today()) {
       const left = dateDiff(today(), b.expiry_date);
       if (left !== null && left <= 30) {

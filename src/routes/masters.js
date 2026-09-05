@@ -18,11 +18,16 @@ router.get('/options', requireStaff(), (req, res) => {
     stores: db.prepare('SELECT id,code,name,open_time,close_time FROM stores WHERE active = 1 ORDER BY id').all(),
     therapists: db.prepare('SELECT id,code,name,nickname,level,gender,store_id,skills,is_blind FROM therapists WHERE active = 1 ORDER BY code, name').all(),
     rooms: db.prepare('SELECT id,name,rtype,capacity,store_id FROM rooms WHERE active = 1 ORDER BY store_id, seq, name').all(),
-    services: db.prepare('SELECT id,code,name,category,minutes,price,room_type,contraindications FROM services WHERE active = 1 ORDER BY seq, category, name').all(),
+    services: db.prepare(`SELECT id,code,name,category,minutes,price,list_price,member_price,is_package,
+      package_items,room_type,contraindications FROM services WHERE active = 1 ORDER BY seq, category, name`).all(),
+    addons: db.prepare('SELECT id,code,name,category,minutes,list_price,price,member_price,requires_therapist FROM addons WHERE active = 1 ORDER BY seq, category, name').all(),
     retail_products: db.prepare('SELECT id,sku,name,category,price,stock FROM retail_products WHERE active = 1 ORDER BY category, name').all(),
     members: db.prepare('SELECT id,member_no,name,phone,fav_therapist_id FROM members WHERE active = 1 ORDER BY name').all(),
     staff: db.prepare("SELECT id,name FROM users WHERE active = 1 ORDER BY name").all(),
     level_rates: levelRates(),
+    voucher_platforms: require('../db').getSetting('voucher_platforms', '').split('\n').map(x => x.trim()).filter(Boolean),
+    business_day_start: require('../db').getSetting('business_day_start', '04:00'),
+    board_hours: Number(require('../db').getSetting('board_hours', '24')) || 24,
     lists
   });
 });
@@ -63,12 +68,32 @@ attach(router, {
 
 attach(router, {
   table: 'services', module: 'services', label: '服務項目',
-  fields: ['code', 'name', 'category', 'minutes', 'price', 'room_type', 'pct_normal', 'pct_designated',
-    'contraindications', 'buffer_min', 'description', 'seq'],
-  nums: ['minutes', 'price', 'pct_normal', 'pct_designated', 'buffer_min', 'seq'],
+  fields: ['code', 'name', 'category', 'minutes', 'list_price', 'price', 'member_price', 'room_type',
+    'pct_normal', 'pct_designated', 'contraindications', 'buffer_min', 'description', 'seq',
+    'is_package', 'package_items'],
+  nums: ['minutes', 'list_price', 'price', 'member_price', 'pct_normal', 'pct_designated', 'buffer_min', 'seq', 'is_package'],
   search: ['name', 'code', 'category'], order: 'seq, category, name',
   validate(d) {
     if (d.minutes !== undefined && d.minutes <= 0) return '服務時長要大於 0 分鐘';
+    // 牌價低於現場價的話，折扣率會算出負數，畫面上會出現「折 -12%」這種東西
+    if (d.list_price && d.price && d.list_price < d.price) return '牌價不應低於現場價';
+    if (d.member_price && d.price && d.member_price > d.price) return '會員價不應高於現場價';
+    if (d.is_package && !String(d.package_items || '').trim()) return '組合套票必須指定包含哪些服務項目';
+    return null;
+  }
+});
+
+// 加購品主檔。原本刮痧、拔罐這些只能在鐘單上自由輸入，
+// 結果每個櫃檯打出來的名字都不一樣，月底統計不出「刮痧到底賣了幾次」。
+attach(router, {
+  table: 'addons', module: 'addons', label: '加購品',
+  fields: ['code', 'name', 'category', 'minutes', 'list_price', 'price', 'member_price',
+    'pct_commission', 'requires_therapist', 'note', 'seq'],
+  nums: ['minutes', 'list_price', 'price', 'member_price', 'pct_commission', 'requires_therapist', 'seq'],
+  search: ['name', 'code', 'category'], order: 'seq, category, name',
+  validate(d) {
+    if (d.price !== undefined && d.price < 0) return '價格不能是負數';
+    if (d.member_price && d.price && d.member_price > d.price) return '會員價不應高於現場價';
     return null;
   }
 });
@@ -84,13 +109,13 @@ attach(router, {
 
 const MEMBER_FIELDS = ['member_no', 'name', 'phone', 'line_uid', 'gender', 'birthday', 'store_id', 'source',
   'tags', 'fav_therapist_id', 'pressure_pref', 'avoid_parts', 'conditions', 'health_note',
-  'consent_at', 'blacklist', 'blacklist_reason', 'note'];
+  'consent_at', 'blacklist', 'blacklist_reason', 'referrer_id', 'note'];
 
 function pickMember(b) {
   const o = {};
   for (const f of MEMBER_FIELDS) {
     if (b[f] === undefined) continue;
-    if (['store_id', 'fav_therapist_id'].includes(f)) o[f] = (b[f] === '' || b[f] === null) ? null : (Number(b[f]) || null);
+    if (['store_id', 'fav_therapist_id', 'referrer_id'].includes(f)) o[f] = (b[f] === '' || b[f] === null) ? null : (Number(b[f]) || null);
     else if (f === 'blacklist') o[f] = Number(b[f]) ? 1 : 0;
     else o[f] = String(b[f]).trim();
   }
@@ -144,6 +169,17 @@ router.get('/members/:id', requireAny('members', 'tickets', 'wallets', 'passes')
       LEFT JOIN services s ON s.id = p.service_id WHERE p.member_id = ? ORDER BY p.id DESC`).all(m.id)
       .map(p => ({ ...p, remain: p.total_times - p.used_times, real_status: prepaid.passStatus(p) })),
     tickets, fav_services: favServices, fav_therapists: favTherapists,
+    // 集點、介紹關係、同意書與照片：換技師接手、或客人問「我還有幾點」時要立刻答得出來
+    points: {
+      balance: require('../loyalty').balanceOf(m.id),
+      txns: require('../loyalty').txnsOf(m.id, 20),
+      rules: require('../loyalty').summary().rules
+    },
+    referrer: m.referrer_id ? db.prepare('SELECT id,name,phone FROM members WHERE id = ?').get(m.referrer_id) : null,
+    referred: require('../loyalty').referrals({ memberId: m.id }),
+    consent: require('../consent').statusOf(m.id),
+    consents: require('../consent').listFor(m.id),
+    photos: require('../storage').listFor('member', m.id),
     stats: {
       visits: tickets.filter(t => t.status === 'done').length,
       total_spent: yuan(tickets.filter(t => t.status === 'done').reduce((s, t) => s + t.net_amount, 0))
@@ -183,6 +219,34 @@ router.put('/members/:id', requireAny('members', 'tickets'), (req, res) => {
   }
   audit('staff', req.user.id, req.user.name, `修改客人：${cur.name}`);
   res.json(db.prepare('SELECT * FROM members WHERE id = ?').get(req.params.id));
+});
+
+// 客人照片。上傳一律經過 storage 的回讀驗證，驗不過就回 400，不會有「顯示成功、檔案是壞的」。
+router.post('/members/:id/photo', requireAny('members', 'tickets'), (req, res) => {
+  const m = db.prepare('SELECT * FROM members WHERE id = ?').get(req.params.id);
+  if (!m) return res.status(404).json({ error: '找不到這位客人' });
+  const storage = require('../storage');
+  const a = storage.save({
+    dataUrl: req.body?.data, filename: req.body?.filename || `member-${m.id}.jpg`,
+    ownerType: 'member', ownerId: m.id, kind: 'photo',
+    note: req.body?.note || '', actor: req.user.name
+  });
+  // 設為大頭照（舊的照片留著，只是不再是主要那張）
+  db.prepare('UPDATE members SET photo_id = ? WHERE id = ?').run(a.id, m.id);
+  audit('staff', req.user.id, req.user.name, `上傳客人照片：${m.name}（已通過完整性驗證）`);
+  res.json({ ...a, photos: storage.listFor('member', m.id) });
+});
+
+router.delete('/members/:id/photo/:photoId', requireStaff('members'), (req, res) => {
+  const storage = require('../storage');
+  const ok = storage.remove(Number(req.params.photoId), req.user.name);
+  if (!ok) return res.status(404).json({ error: '找不到這張照片' });
+  const m = db.prepare('SELECT * FROM members WHERE id = ?').get(req.params.id);
+  if (m && String(m.photo_id) === String(req.params.photoId)) {
+    const rest = storage.listFor('member', m.id);
+    db.prepare('UPDATE members SET photo_id = ? WHERE id = ?').run(rest[0]?.id || null, m.id);
+  }
+  res.json({ ok: true, photos: storage.listFor('member', req.params.id) });
 });
 
 router.delete('/members/:id', requireStaff('members'), (req, res) => {

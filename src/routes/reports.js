@@ -27,7 +27,7 @@ router.get('/dashboard', requireStaff('dashboard'), (req, res) => {
     today: {
       ...dayRev,
       cash: finance.cashFlow(d, shiftDate(d, 1), sid),
-      booked: db.prepare(`SELECT COUNT(*) n FROM tickets WHERE substr(start_at,1,10) = ? AND status = 'booked'`).get(d).n,
+      booked: db.prepare("SELECT COUNT(*) n FROM tickets WHERE biz_date = ? AND status = 'booked'").get(d).n,
       serving: board.list.filter(x => x.status === 'serving').length,
       waiting: board.list.filter(x => x.status === 'waiting').length,
       on_duty: board.list.filter(x => x.status !== 'off').length,
@@ -40,6 +40,12 @@ router.get('/dashboard', requireStaff('dashboard'), (req, res) => {
       open_issues: db.prepare("SELECT COUNT(*) n FROM issues WHERE status <> 'closed'").get().n,
       new_bookings: db.prepare("SELECT COUNT(*) n FROM bookings WHERE status = 'new'").get().n,
       low_stock: db.prepare('SELECT COUNT(*) n FROM retail_products WHERE active = 1 AND stock <= safety_stock').get().n,
+      // 漏結的營業日事後幾乎查不出短少是誰的班，所以它跟證照過期一樣要放在最前面
+      unclosed_days: require('../closing').unclosed({ storeId: sid, days: 14 }).length,
+      missing_invoices: require('../invoicing').enabled()
+        ? require('../invoicing').missing({ from: shiftDate(d, -31), to: d, storeId: sid }).length : 0,
+      consent_missing: require('../consent').audit_list({ storeId: sid })
+        .filter(x => x.visits > 0 && x.status !== 'ok').length,
       repurchase: finance.repurchase({ storeId: sid }).length,
       expiring_passes: db.prepare(`SELECT COUNT(*) n FROM passes WHERE status='active'
         AND expiry_date <> '' AND expiry_date <= ? AND used_times < total_times`).get(shiftDate(d, 30)).n

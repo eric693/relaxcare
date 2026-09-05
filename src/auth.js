@@ -13,34 +13,44 @@ const MODULES = [
   { key: 'tickets', label: '鐘單', group: '每日作業', hint: '開單、加鐘、賣商品、結帳與抽成' },
   { key: 'bookings', label: '線上預約', group: '每日作業', hint: '官網送來的預約申請，確認後轉鐘單' },
   { key: 'issues', label: '客訴與異常', group: '每日作業', hint: '客訴、技師糾紛、收費爭議' },
+  { key: 'closing', label: '日結與交班', group: '每日作業', hint: '對現金抽屜、短溢紀錄、交班簽核' },
 
   { key: 'members', label: '客人檔案', group: '客戶與預收', hint: '基本資料、力道偏好、禁忌部位與健康狀況' },
   { key: 'wallets', label: '儲值金', group: '客戶與預收', hint: '儲值、扣款、轉讓、退款（現金與贈送分開）' },
   { key: 'passes', label: '次卡與套券', group: '客戶與預收', hint: '購買、核銷、展延、轉讓、退卡' },
   { key: 'repurchase', label: '回購與名單', group: '客戶與預收', hint: '久未回店名單、指名回購週期' },
+  { key: 'vouchers', label: '團購券', group: '客戶與預收', hint: 'Klook／GOMAJI 券號建檔、核銷與平台對帳' },
+  { key: 'loyalty', label: '點數與介紹', group: '客戶與預收', hint: '集點、兌換贈送金、介紹人獎勵與排行' },
 
   { key: 'therapists', label: '技師管理', group: '資源與商品', hint: '技師檔案、級別、抽成％與指名費' },
   { key: 'rooms', label: '床位與包廂', group: '資源與商品', hint: '房型、數量、使用率' },
-  { key: 'services', label: '服務項目', group: '資源與商品', hint: '品項、時長、定價、禁忌設定' },
+  { key: 'services', label: '服務項目', group: '資源與商品', hint: '品項、時長、三層定價、套票與禁忌設定' },
+  { key: 'addons', label: '加購品', group: '資源與商品', hint: '刮痧、拔罐、足部護理等固定加購' },
   { key: 'retail', label: '商品與庫存', group: '資源與商品', hint: '販售商品、成本、庫存與抽成' },
+  { key: 'purchase', label: '進退貨與盤點', group: '資源與商品', hint: '進貨、退貨、盤點差異、跨店調撥與庫存流水' },
 
   { key: 'payroll', label: '薪資結算', group: '薪酬', hint: '底薪＋抽成＋指名費＋級距獎金的月結' },
   { key: 'commission', label: '抽成與級距', group: '薪酬', hint: '級別預設％、業績級距獎金設定' },
   { key: 'attendance', label: '出勤與工時', group: '薪酬', hint: '簽到退、當日時數、連續上鐘警示' },
+  { key: 'roster', label: '班表', group: '薪酬', hint: '預排下週班別、複製上週、班表與實際簽到的落差' },
 
   { key: 'finance', label: '營運損益', group: '財務', hint: '收入、抽成成本、費用與毛利' },
   { key: 'liability', label: '預收負債表', group: '財務', hint: '儲值與次卡未使用餘額（會計上的負債）' },
   { key: 'expenses', label: '費用登錄', group: '財務', hint: '房租、耗材、洗滌等營運支出' },
-  { key: 'tax', label: '營業稅試算', group: '財務', hint: '預收不計稅、實際服務才認列' },
-
-  { key: 'compliance', label: '用語合規自檢', group: '法遵', hint: '民俗調理業禁用字詞掃描（療效、醫療）' },
-  { key: 'expiry', label: '證照與健檢到期', group: '法遵', hint: '技術士證、健康檢查的到期追蹤' },
+  { key: 'invoices', label: '發票與折讓', group: '財務', hint: '開立登錄、作廢、折讓與待開名單' },
+  // 「營業稅試算」與「用語合規自檢」原本各自是一頁。
+  // 店長一年用不到幾次，側欄多兩項只是雜訊 —— 權限鍵保留（後端端點仍受它保護），
+  // 畫面分別收進「營運損益」與「法遵與證照」的分頁裡。
+  { key: 'tax', label: '營業稅試算', group: '財務', hint: '預收不計稅、實際服務才認列（畫面在營運損益的分頁）', hidden: true },
+  { key: 'compliance', label: '法遵與證照', group: '法遵', hint: '證照健檢到期、民俗調理業用語自檢、同意書完整度' },
+  { key: 'expiry', label: '（併入法遵與證照）', group: '法遵', hint: '證照到期的編輯權限，畫面在法遵與證照頁', hidden: true },
 
   { key: 'notifications', label: '通知紀錄', group: '系統', hint: 'LINE 預約提醒與回購推播的送出紀錄' },
   { key: 'stores', label: '分店設定', group: '系統', hint: '門市、營業時間、跨店拆帳比例' },
   { key: 'users', label: '帳號權限', group: '系統', hint: '新增帳號與調整他人權限' },
   { key: 'settings', label: '系統設定', group: '系統', hint: '公司名稱、下拉選項、輪鐘規則、預收規則' },
-  { key: 'audit', label: '稽核軌跡', group: '系統', hint: '誰在什麼時候做了什麼' }
+  { key: 'audit', label: '稽核軌跡', group: '系統', hint: '誰在什麼時候做了什麼' },
+  { key: 'backup', label: '備份與檔案', group: '系統', hint: '手動備份、下載、還原，以及上傳檔案的完整性檢查' }
 ];
 const MODULE_GROUPS = ['每日作業', '客戶與預收', '資源與商品', '薪酬', '財務', '法遵', '系統'];
 const MODULE_KEYS = MODULES.map(m => m.key);

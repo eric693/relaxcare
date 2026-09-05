@@ -52,8 +52,7 @@ function board(workDate, storeId) {
            COALESCE(SUM(minutes),0) AS minutes_total,
            COALESCE(SUM(net_amount),0) AS amount_total
     FROM tickets
-    WHERE substr(COALESCE(NULLIF(actual_start,''), start_at),1,10) = ?
-      AND status IN ('serving','done')
+    WHERE biz_date = ? AND status IN ('serving','done')
     GROUP BY therapist_id`).all(d);
   const statMap = Object.fromEntries(stats.map(s => [s.therapist_id, s]));
 
@@ -226,7 +225,7 @@ function checkAssign({ therapistId, workDate, assignType, startAt, endAt, minute
   // 當日時數與連續上鐘
   const dayStat = db.prepare(`
     SELECT COALESCE(SUM(minutes),0) AS mins, COUNT(*) AS cnt FROM tickets
-    WHERE therapist_id = ? AND substr(COALESCE(NULLIF(actual_start,''), start_at),1,10) = ?
+    WHERE therapist_id = ? AND biz_date = ?
       AND status IN ('booked','serving','done') AND id <> COALESCE(?, -1)`).get(therapistId, d, ticketId || null);
   const maxMin = num('daily_minutes_max', 480);
   const willBe = dayStat.mins + (Number(minutes) || 0);

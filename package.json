@@ -7,7 +7,8 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "seed": "node scripts/seed.js",
-    "test": "node scripts/consistency-test.js"
+    "test": "node scripts/consistency-test.js",
+    "e2e": "node scripts/e2e-test.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

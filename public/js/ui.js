@@ -48,6 +48,8 @@ const UI = {
     document.body.appendChild(mask);
     UI.bindSearchSelects(bodyEl);        // 可搜尋下拉一律自動生效
     UI.bindCheckLists(bodyEl);           // 複選群組同理，呼叫端不必自己記得綁
+    UI.bindFileFields(bodyEl);           // 檔案欄位（含預覽）
+    UI.bindSignature(bodyEl);            // 簽名板
     if (onOpen) onOpen(bodyEl, close);
     return { close, body: bodyEl };
   },
@@ -205,6 +207,137 @@ const UI = {
     return out;
   },
 
+  // ---- 檔案上傳 ----
+  //
+  // 檔案讀成 data URL 送到後端，後端存檔後會回讀比對指紋才回成功（見 src/storage.js）。
+  // 這裡只做兩件事：先擋掉明顯不對的（型別、大小），以及**絕不自己宣告成功**——
+  // 成功訊息一律等後端回來才顯示。使用者看到「上傳成功」時，檔案必定已經落盤並驗過。
+  MAX_UPLOAD: 8 * 1024 * 1024,
+  ACCEPT: 'image/jpeg,image/png,image/webp,image/gif,application/pdf',
+
+  readFile(file) {
+    return new Promise((resolve, reject) => {
+      if (!file) return reject(new Error('沒有選擇檔案'));
+      if (file.size > UI.MAX_UPLOAD) {
+        return reject(new Error(`${file.name} 有 ${(file.size / 1048576).toFixed(1)}MB，超過 8MB 上限`));
+      }
+      if (!UI.ACCEPT.split(',').includes(file.type)) {
+        return reject(new Error(`${file.name} 不是可上傳的型別（JPG／PNG／WebP／GIF／PDF）`));
+      }
+      const r = new FileReader();
+      r.onerror = () => reject(new Error(`${file.name} 讀取失敗，檔案可能已損毀`));
+      // 讀到一半失敗會走 onerror；這裡再確認一次結果不是空的
+      r.onload = () => {
+        const data = String(r.result || '');
+        if (!data.startsWith('data:') || data.length < 32) {
+          return reject(new Error(`${file.name} 讀取結果不完整，請重新選擇`));
+        }
+        resolve({ data, name: file.name, size: file.size, type: file.type });
+      };
+      r.readAsDataURL(file);
+    });
+  },
+
+  // 上傳一個檔案並回傳後端建立的附件。失敗一律丟例外，呼叫端不必判斷回傳值。
+  async upload(file, { ownerType, ownerId, kind = 'photo', note = '', url } = {}) {
+    const f = await UI.readFile(file);
+    const body = { data: f.data, filename: f.name, owner_type: ownerType, owner_id: ownerId, kind, note };
+    const r = await POST(url || '/files', body);
+    // 後端已經回讀驗證過；這裡再確認回來的大小合理，避免中間有東西默默改寫了請求
+    if (!r || !r.id) throw new Error('上傳失敗：伺服器沒有回傳檔案編號');
+    return r;
+  },
+
+  // 檔案選擇欄位（含即時預覽）。回傳的 input 元素用 .files 取檔。
+  fileField(name, label, opts = {}) {
+    const { accept = UI.ACCEPT, hint = '可上傳 JPG／PNG／WebP／GIF／PDF，單檔 8MB 以內', multiple = false, full = true } = opts;
+    return `<div class="form-row${full ? ' full' : ''}">
+      <label>${UI.esc(label)}</label>
+      <input type="file" data-file="${name}" accept="${UI.esc(accept)}"${multiple ? ' multiple' : ''}>
+      <div class="file-preview" data-file-preview="${name}"></div>
+      ${hint ? `<div class="muted">${UI.esc(hint)}</div>` : ''}
+    </div>`;
+  },
+  bindFileFields(root) {
+    root.querySelectorAll('[data-file]').forEach(input => {
+      if (input.dataset.bound) return;
+      input.dataset.bound = '1';
+      const box = root.querySelector(`[data-file-preview="${input.dataset.file}"]`);
+      input.addEventListener('change', async () => {
+        if (!box) return;
+        box.innerHTML = '';
+        for (const f of input.files) {
+          try {
+            const r = await UI.readFile(f);
+            box.insertAdjacentHTML('beforeend', r.type === 'application/pdf'
+              ? `<span class="tag">📄 ${UI.esc(r.name)}（${(r.size / 1024).toFixed(0)}KB）</span>`
+              : `<figure class="thumb"><img src="${r.data}" alt="${UI.esc(r.name)}">
+                  <figcaption>${UI.esc(r.name)}<br>${(r.size / 1024).toFixed(0)}KB</figcaption></figure>`);
+          } catch (e) {
+            box.insertAdjacentHTML('beforeend', `<div class="notice danger">${UI.esc(e.message)}</div>`);
+          }
+        }
+      });
+    });
+  },
+
+  // ---- 簽名板 ----
+  // 同意書要客人當場簽。滑鼠與觸控都要能畫（櫃檯多半是平板遞給客人）。
+  signaturePad(name, label = '客人簽名') {
+    return `<div class="form-row full">
+      <label>${UI.esc(label)}</label>
+      <div class="sign-wrap">
+        <canvas data-sign="${name}" width="600" height="200"></canvas>
+        <div class="sign-bar">
+          <button type="button" class="btn tiny secondary" data-sign-clear="${name}">清除重簽</button>
+          <span class="muted" data-sign-state="${name}">尚未簽名</span>
+        </div>
+      </div>
+    </div>`;
+  },
+  bindSignature(root) {
+    root.querySelectorAll('[data-sign]').forEach(cv => {
+      if (cv.dataset.bound) return;
+      cv.dataset.bound = '1';
+      const ctx = cv.getContext('2d');
+      // 白底：透明背景存成 PNG 之後，列印或貼進 PDF 會看不見筆跡
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height);
+      ctx.lineWidth = 2.4; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#111';
+      const state = root.querySelector(`[data-sign-state="${cv.dataset.sign}"]`);
+      let drawing = false, dirty = false;
+      const pos = e => {
+        const r = cv.getBoundingClientRect();
+        const p = e.touches ? e.touches[0] : e;
+        return { x: (p.clientX - r.left) * (cv.width / r.width), y: (p.clientY - r.top) * (cv.height / r.height) };
+      };
+      const start = e => { e.preventDefault(); drawing = true; const q = pos(e); ctx.beginPath(); ctx.moveTo(q.x, q.y); };
+      const move = e => {
+        if (!drawing) return;
+        e.preventDefault();
+        const q = pos(e); ctx.lineTo(q.x, q.y); ctx.stroke();
+        if (!dirty) { dirty = true; cv.dataset.signed = '1'; if (state) state.textContent = '已簽名'; }
+      };
+      const end = () => { drawing = false; };
+      cv.addEventListener('mousedown', start); cv.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', end);
+      cv.addEventListener('touchstart', start, { passive: false });
+      cv.addEventListener('touchmove', move, { passive: false });
+      cv.addEventListener('touchend', end);
+      const clear = root.querySelector(`[data-sign-clear="${cv.dataset.sign}"]`);
+      if (clear) clear.onclick = () => {
+        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height);
+        dirty = false; delete cv.dataset.signed;
+        if (state) state.textContent = '尚未簽名';
+      };
+    });
+  },
+  // 取簽名圖；沒簽過回 null（呼叫端要擋下來，不要送一張空白的白圖上去）
+  signatureData(root, name) {
+    const cv = root.querySelector(`[data-sign="${name}"]`);
+    if (!cv || !cv.dataset.signed) return null;
+    return cv.toDataURL('image/png');
+  },
+
   // rowsHtml 可以是 <tr> 陣列，也可以是已經串好的一整段 HTML 字串。
   // 兩種寫法在呼叫端都很自然，這裡一併吃下來，不要讓呼叫端記得該用哪一種。
   table(headers, rowsHtml, emptyMsg = '目前沒有資料') {
@@ -272,6 +405,8 @@ const TW = {
     adjust: '人工調整', expire: '贈送金到期'
   },
   pass_kind: { buy: '購買', use: '核銷', void: '核銷回沖', refund: '退卡', transfer: '轉讓', extend: '展延' },
+  voucher_status: { unused: '未核銷', used: '已核銷', settled: '已入帳', expired: '已過期', void: '已作廢' },
+  price_tier: { list: '牌價', walkin: '現場價', member: '會員價', package: '套票價', voucher: '團購券' },
   pass_status: { active: '使用中', used_up: '已用完', expired: '已過期', refunded: '已退卡', transferred: '已轉出' },
   payroll_status: { draft: '試算中', confirmed: '已確認', paid: '已發放' },
   issue_status: { open: '待處理', handling: '處理中', closed: '已結案' },

@@ -75,6 +75,17 @@ const Charts = {
         <text class="ax" x="${P.l - 8}" y="${(y(t) + 4).toFixed(1)}" text-anchor="end">${Charts.shortNum(t)}</text>`;
     }
 
+    // X 軸標籤間隔：30 天的日期標籤擠在 860px 裡一定會疊在一起，糊成一片黑。
+    // 依「一個標籤實際佔多寬」算出每隔幾根才寫一個字，並且一定寫最後一根 ——
+    // 使用者看圖最想知道的就是「最新的那天是哪天」。
+    const AX_CHAR_W = 7.2;                       // .ax 是 12px，中文與數字混排約略的字寬
+    const labelW = Math.max(...data.map(d => String(d.label).length)) * AX_CHAR_W + 8;
+    const step = Math.max(1, Math.ceil(labelW / gw));
+    const showLabel = di => di % step === 0 || di === data.length - 1;
+    // 最後一根若與前一個被標記的太近就讓前面那個讓位，免得結尾兩個字疊在一起
+    const lastKept = Math.floor((data.length - 1) / step) * step;
+    const skipDi = (data.length - 1 - lastKept) < step && lastKept !== data.length - 1 ? lastKept : -1;
+
     let m = '';
     data.forEach((d, di) => {
       const cx = P.l + gw * di + gw / 2;
@@ -87,7 +98,9 @@ const Charts = {
           width="${(bw - 2).toFixed(1)}" height="${h.toFixed(1)}" rx="4" fill="${Charts.color(si)}"
           data-tip="${Charts.esc(d.label)}｜${Charts.esc(series[si])}：${Charts.esc(fmt(v))}"/>`;
       });
-      m += `<text class="ax" x="${cx.toFixed(1)}" y="${H - 12}" text-anchor="middle">${Charts.esc(d.label)}</text>`;
+      if (showLabel(di) && di !== skipDi) {
+        m += `<text class="ax" x="${cx.toFixed(1)}" y="${H - 12}" text-anchor="middle">${Charts.esc(d.label)}</text>`;
+      }
     });
 
     const table = `<table class="list"><thead><tr><th>項目</th>${series.map(s => `<th>${Charts.esc(s)}</th>`).join('')}</tr></thead>

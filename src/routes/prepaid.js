@@ -125,7 +125,8 @@ router.get('/passes', requireAny('passes', 'liability'), (req, res) => {
     ORDER BY p.id DESC LIMIT 500`).all(...args);
   res.json(rows.map(p => ({
     ...p, remain: p.total_times - p.used_times,
-    unit_value: prepaid.passUnitValue(p), real_status: prepaid.passStatus(p),
+    unit_value: prepaid.passUnitValue(p), remain_value: prepaid.passRemainValue(p),
+    real_status: prepaid.passStatus(p),
     days_left: p.expiry_date ? require('../db').dateDiff(today(), p.expiry_date) : null
   })));
 });
@@ -156,7 +157,8 @@ router.post('/passes', requireStaff('passes'), (req, res) => {
     name: b.name, totalTimes: b.total_times, pricePaid: b.price_paid, listValue: b.list_value,
     expiryDate: b.expiry_date, soldBy: b.sold_by ? Number(b.sold_by) : null,
     storeId: b.store_id ? Number(b.store_id) : null,
-    transferable: b.transferable === undefined ? 1 : Number(b.transferable), note: b.note, actor: actorOf(req)
+    transferable: b.transferable === undefined ? 1 : Number(b.transferable),
+    payMethod: b.pay_method, note: b.note, actor: actorOf(req)
   });
   const m = db.prepare('SELECT name FROM members WHERE id = ?').get(b.member_id);
   audit('staff', req.user.id, req.user.name, `${m.name} 購買次卡 ${p.pass_no}：${p.name} ${p.total_times} 次／${yuan(p.price_paid)} 元`);
@@ -209,7 +211,8 @@ router.get('/liability', requireStaff('liability'), (req, res) => {
       LEFT JOIN members m ON m.id = p.member_id
       WHERE p.status = 'active' AND p.expiry_date <> '' AND p.expiry_date <= ?
       ORDER BY p.expiry_date`).all(soon)
-      .map(p => ({ ...p, remain: p.total_times - p.used_times, unit_value: prepaid.passUnitValue(p) }))
+      .map(p => ({ ...p, remain: p.total_times - p.used_times, unit_value: prepaid.passUnitValue(p),
+        remain_value: prepaid.passRemainValue(p) }))
       .filter(p => p.remain > 0),
     expiring_bonus: db.prepare(`SELECT w.*, m.name AS member_name, m.phone FROM wallets w
       JOIN members m ON m.id = w.member_id
