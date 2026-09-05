@@ -42,13 +42,20 @@ App.page('closing', {
           ${stat('應有現金', UI.fmtMoney(pv.expected_cash), `零用金 ${UI.fmtMoney(pv.open_float)}`, 'ok')}
           ${stat('鐘單收現', UI.fmtMoney(pv.ticket_cash), `${pv.tickets} 張已結帳`)}
           ${stat('儲值／售卡收現', UI.fmtMoney(pv.topup_cash + pv.pass_cash), `儲值 ${UI.fmtMoney(pv.topup_cash)}・售卡 ${UI.fmtMoney(pv.pass_cash)}`)}
-          ${stat('現金支出／退款', UI.fmtMoney(pv.cash_expense + pv.cash_refund), '從抽屜拿出去的')}
+          ${stat('現金支出／退款', UI.fmtMoney(pv.cash_expense + pv.cash_refund),
+            pv.cash_expense_outside ? `另有 ${UI.fmtMoney(pv.cash_expense_outside)} 登錄在其他時段` : '從抽屜拿出去的',
+            pv.cash_expense_outside ? 'warn' : '')}
           ${stat('刷卡與行動支付', UI.fmtMoney(pv.card_amount), '不進抽屜，跟收單機對', 'warn')}
           ${stat('動用預收', UI.fmtMoney(pv.wallet_used + pv.pass_used + pv.voucher_used),
             `儲值 ${UI.fmtMoney(pv.wallet_used)}・次卡 ${UI.fmtMoney(pv.pass_used)}・券 ${UI.fmtMoney(pv.voucher_used)}`)}
         </div>
         <div class="notice">統計區間：${UI.esc(pv.from_at)} ~ ${UI.esc(pv.to_at)}（不含結束時刻）。
-          鐘單以「結帳時間」歸班：早班的客人做到晚班才結帳，那筆錢在晚班的抽屜裡。</div>
+          鐘單以「結帳時間」歸班：早班的客人做到晚班才結帳，那筆錢在晚班的抽屜裡。
+          現金支出以「登錄時間」歸班，這樣同一天分兩班結時才不會各扣一次。</div>
+        ${pv.cash_expense_outside ? `<div class="notice warn">今天另有
+          <b>${UI.fmtMoney(pv.cash_expense_outside)}</b> 的現金支出登錄在本班區間之外
+          （多半是隔天才補登的）。這筆錢確實離開了抽屜，但不會算進這一班的應有現金 ——
+          若點鈔短少的金額接近它，原因大概就在這裡。</div>` : ''}
         <div style="margin:12px 0"><button class="btn" id="do-close">開始點鈔並日結</button></div>
         ${list.unclosed.length ? `<div class="notice danger"><b>⛔ 有 ${list.unclosed.length} 個營業日還沒日結：</b>
           ${list.unclosed.slice(0, 10).map(u => `${UI.esc(u.d)}（${u.n} 張／收現 ${UI.fmtMoney(u.cash)}）`).join('、')}</div>` : ''}

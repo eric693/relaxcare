@@ -18,7 +18,7 @@
 process.env.TZ = 'Asia/Taipei';
 const { execFileSync } = require('child_process');
 const path = require('path');
-const { db, today, bizDate, yuan } = require('../src/db');
+const { db, today, bizDate, bizRange, yuan } = require('../src/db');
 
 const BASE = process.env.BASE_URL || 'http://127.0.0.1:3460';
 let pass = 0, fail = 0;
@@ -242,6 +242,34 @@ function burst(n, fn) { return Promise.all(Array.from({ length: n }, (_, i) => f
     ok('只有 3 個行程扣得到貨', okN === 3, `${okN} 個成功｜${outs.map(o => o.split('\n').pop()).join(' / ')}`);
     await api('/stock/count', { method: 'POST',
       body: { items: [{ product_id: p.id, counted: before }], reason: '跨行程測試還原' } });
+  })();
+
+  // ---- 10. 一天分兩班結，現金支出不能各扣一次 ----
+  // 這是實際踩到的 bug：原本用 spend_date 抓當天全部的現金支出，
+  // 早班與晚班各結一次時兩張都扣，短少憑空多出一份。
+  await (async () => {
+    const day = bizDate();
+    const closing = require('../src/closing');
+    db.prepare("DELETE FROM expenses WHERE note = '日結分班測試'").run();
+    // 一筆 500 元的現金支出，登錄時間就是現在
+    db.prepare(`INSERT INTO expenses(store_id,spend_date,category,vendor,amount,pay_method,note)
+      VALUES(NULL,?,'用品耗材','測試',500,'現金','日結分班測試')`).run(day);
+    const r = bizRange(day);
+    // 把營業日切成兩班：前半 / 後半
+    const mid = require('../src/db').fromMinutes(
+      Math.floor((require('../src/db').toMinutes(r.start) + require('../src/db').toMinutes(r.end)) / 2));
+    const early = closing.compute({ bizDate: day, fromAt: r.start, toAt: mid });
+    const late = closing.compute({ bizDate: day, fromAt: mid, toAt: r.end });
+    const whole = closing.compute({ bizDate: day });
+    const sum = early.cash_expense + late.cash_expense;
+    ok('一天分兩班，現金支出只被扣一次', sum === whole.cash_expense,
+      `早班 ${early.cash_expense} + 晚班 ${late.cash_expense} = ${sum}，整日 ${whole.cash_expense}`);
+    ok('那 500 元確實有被算到某一班', sum >= 500, `合計 ${sum}`);
+    // 沒算到的那一班要把它講出來，而不是默默漏掉
+    const missed = early.cash_expense === 0 ? early : late;
+    ok('沒算到的那一班會提示「登錄在其他時段」', missed.cash_expense_outside >= 500,
+      `提示金額 ${missed.cash_expense_outside}`);
+    db.prepare("DELETE FROM expenses WHERE note = '日結分班測試'").run();
   })();
 
   console.log(`\n並發測試：${pass} 項通過，${fail} 項失敗`);

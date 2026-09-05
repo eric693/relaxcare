@@ -220,7 +220,16 @@ const buyPass = db.transaction(({ memberId, serviceId, name, totalTimes, pricePa
   const svc = serviceId ? db.prepare('SELECT * FROM services WHERE id = ?').get(serviceId) : null;
   const months = num('pass_default_months', 12);
   const exp = expiryDate || (months > 0 ? addMonths(today(), months) : '');
-  const lv = yuan(listValue) || (svc ? yuan(svc.price) * times : 0);
+  // 原價總值：沒給就用綁定服務的牌價 × 次數；都沒有就等於實付（＝沒打折的卡）。
+  let lv = yuan(listValue) || (svc ? yuan(svc.price) * times : 0);
+  if (!lv) lv = yuan(pricePaid);
+  // 實付不能高於原價總值。次卡本來就是「先付錢換折扣」，賣得比原價還貴幾乎一定是打錯
+  // （多打一個 0、或選錯服務項目）。而且它會讓退卡的兩種算法反轉 ——
+  // 「已使用次數按原價扣回」會退得比「按實付單價退未使用次數」還多，等於送錢出去。
+  if (yuan(pricePaid) > lv) {
+    throw new Error(`實付 ${yuan(pricePaid)} 元高於原價總值 ${lv} 元。`
+      + `次卡是先付錢換折扣，請確認金額或改填正確的原價總值`);
+  }
   const no = nextSerial('PC');
   const info = db.prepare(`INSERT INTO passes(pass_no,member_id,store_id,service_id,name,total_times,
                             price_paid,list_value,buy_date,expiry_date,transferable,sold_by,pay_method,note)

@@ -89,10 +89,24 @@ function compute({ storeId, bizDate: d, fromAt, toAt, openFloat }) {
   const refundCash = yuan(db.prepare(`SELECT COALESCE(SUM(w.amount),0) v FROM wallet_txns w
     WHERE w.kind = 'refund' AND w.created_at >= ? AND w.created_at < ?${wf}`).get(from, to, ...sargs).v);
 
-  // 當班的現金支出（零用金買水、叫便當、修東西）
+  // 當班的現金支出（零用金買水、叫便當、修東西）。
+  //
+  // 這裡用「登錄時間」歸班，不是用 spend_date。
+  // 原本是 `spend_date = ?`，也就是整個營業日 —— 早班與晚班各結一次時，
+  // **兩張日結都會扣掉同一天的全部現金支出**，短少憑空多出一份。
+  // 費用資料表只有日期沒有時分，所以只能用 created_at（key 進系統的時刻）當代理，
+  // 對一家小店來說那跟「錢從抽屜拿出去的時刻」差不了多少。
   const ef = storeId ? ' AND store_id = ?' : '';
   const cashExpense = yuan(db.prepare(`SELECT COALESCE(SUM(amount),0) v FROM expenses
-    WHERE spend_date = ? AND pay_method IN ${inClause(cash)}${ef}`).get(day, ...cash, ...sargs).v);
+    WHERE created_at >= ? AND created_at < ? AND pay_method IN ${inClause(cash)}${ef}`)
+    .get(from, to, ...cash, ...sargs).v);
+  // 同一個營業日、但登錄時間落在本班區間之外的現金支出（多半是隔天才補登的）。
+  // 這筆錢確實從某個抽屜拿出去了，卻不會出現在任何一張日結上 ——
+  // 與其讓它變成一筆查不出來的短少，不如在畫面上講出來。
+  const outsideExpense = yuan(db.prepare(`SELECT COALESCE(SUM(amount),0) v FROM expenses
+    WHERE spend_date = ? AND NOT (created_at >= ? AND created_at < ?)
+      AND pay_method IN ${inClause(cash)}${ef}`)
+    .get(day, from, to, ...cash, ...sargs).v);
 
   const walletUsed = yuan(rows.reduce((s, r) => s + r.paid_wallet, 0));
   const passUsed = yuan(rows.reduce((s, r) => s + r.paid_pass, 0));
@@ -105,7 +119,7 @@ function compute({ storeId, bizDate: d, fromAt, toAt, openFloat }) {
     biz_date: day, from_at: from, to_at: to,
     open_float: float,
     ticket_cash: yuan(ticketCash), topup_cash: yuan(topupCash), pass_cash: yuan(passCash),
-    cash_expense: cashExpense, cash_refund: refundCash,
+    cash_expense: cashExpense, cash_expense_outside: outsideExpense, cash_refund: refundCash,
     expected_cash: expected,
     card_amount: yuan(cardAmount + topupCard + passCard),
     other_amount: yuan(otherAmount),

@@ -198,12 +198,22 @@ const { chromium } = require(PW);
 
   await step('次卡：買 → 核銷 → 退卡試算', async () => {
     const m3 = (await api('/members?q='))[2];
-    const pass = await api('/passes', { method: 'POST', body: { member_id: m3.id, service_id: svc.id, total_times: 10, price_paid: 9000 } });
+    // 金額要合理：10 次卡的實付不能高於原價總值（牌價 × 次數），
+    // 否則退卡的兩種算法會反轉。這裡照「原價的九折」買。
+    const listValue = Math.round(svc.price * 10);
+    const paid = Math.round(listValue * 0.9);
+    const pass = await api('/passes', { method: 'POST', body: { member_id: m3.id, service_id: svc.id,
+      total_times: 10, price_paid: paid, list_value: listValue } });
     const use = await api(`/passes/${pass.id}/use`, { method: 'POST', body: { times: 1, note: '測試' } });
     const q = await api(`/passes/${pass.id}/refund-quote`);
-    if (Math.abs(use.value - 900) > 1) throw new Error(`單次值應為 900，實際 ${use.value}`);
-    if (Math.abs(q.by_unit - 8100) > 1) throw new Error(`退卡應為 8100，實際 ${q.by_unit}`);
-    return `單次值 ${use.value}、核銷後剩 ${use.remain} 次、退卡試算 ${q.by_unit}`;
+    const expectUnit = Math.round(paid / 10);
+    if (Math.abs(use.value - expectUnit) > 1) throw new Error(`單次值應為 ${expectUnit}，實際 ${use.value}`);
+    if (Math.abs(q.by_unit - (paid - expectUnit)) > 1) {
+      throw new Error(`退卡應為 ${paid - expectUnit}，實際 ${q.by_unit}`);
+    }
+    // 打折買的卡，用原價扣回已使用次數一定退得比較少 —— 這是「先付錢換折扣」的代價
+    if (q.by_list > q.by_unit) throw new Error(`原價法 ${q.by_list} 不該多於單價法 ${q.by_unit}`);
+    return `實付 ${paid}／原價 ${listValue}，單次值 ${use.value}、剩 ${use.remain} 次、退卡 單價法 ${q.by_unit}／原價法 ${q.by_list}`;
   });
 
   await step('合規掃描抓得到踩線文案', async () => {

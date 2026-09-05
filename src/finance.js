@@ -93,21 +93,35 @@ function expenses(start, end, storeId) {
   return { rows, total: yuan(rows.reduce((s, r) => s + r.amount, 0)) };
 }
 
-// 月損益。毛利 = 服務營收 - 技師抽成 - 費用。
-// 底薪不在這裡扣（底薪是固定成本，放進費用登錄），避免同一筆錢被算兩次。
+// 月損益。
+//
+//   毛利 = 服務營收 − 技師抽成 − 商品銷貨成本
+//   淨利 = 毛利 − 營運費用
+//
+// **商品銷貨成本一定要扣**。原本沒扣，於是匯出的損益表把「商品銷貨成本」列成一行、
+// 底下的「毛利」卻沒有減掉它 —— 各列加起來對不上總數，拿給會計看第一眼就會被抓包。
+// 成本取自庫存流水（賣出當下記下的成本），不是月底回頭用現在的進價套算。
+//
+// 底薪不在這裡扣（底薪是固定成本，登在費用登錄），避免同一筆錢被算兩次。
 function monthly(period, storeId) {
   const { start, end } = monthRange(period);
   const rev = serviceRevenue(start, end, storeId);
   const exp = expenses(start, end, storeId);
   const cash = cashFlow(start, end, storeId);
-  const gross = rev.revenue - rev.commission;
+  const mv = require('./inventory').movement(start, end, storeId);
+  const cogs = yuan(mv.cogs);
+  const gross = rev.revenue - rev.commission - cogs;
+  const net = gross - exp.total;
   return {
     period, start, end, revenue: rev, expenses: exp, cash,
     commission: rev.commission,
+    cogs, inventory: mv,
+    // 商品自己的毛利，拿來回答「這些保養品到底有沒有賺」
+    retail_margin: yuan(rev.retail - cogs),
     gross_profit: gross,
-    net_profit: gross - exp.total,
+    net_profit: net,
     margin: rev.revenue ? gross / rev.revenue : 0,
-    net_margin: rev.revenue ? (gross - exp.total) / rev.revenue : 0,
+    net_margin: rev.revenue ? net / rev.revenue : 0,
     liability: prepaid.liability(storeId)
   };
 }
@@ -153,6 +167,20 @@ function serviceRank(start, end, storeId) {
     GROUP BY t.service_name ORDER BY amount DESC`).all(start, end, ...f.args);
 }
 
+// 一天營業幾分鐘。
+//
+// 直接把 close 減 open 會在這一行的兩種實際店家上壞掉，而且壞得很明顯：
+//   · 24 小時店（00:00–00:00）算出 0 分鐘 → 使用率永遠是 0%
+//   · 營業到凌晨的店（11:00–03:00）算出負數 → 使用率變成負的
+// 兩家示範店正好各中一種。
+function openMinutesOf(open, close) {
+  const toMin = t => Number(String(t).slice(0, 2)) * 60 + Number(String(t).slice(3, 5));
+  const o = toMin(open || '10:00'), c = toMin(close || '23:00');
+  if (o === c) return 1440;          // 開始與結束同一時刻＝ 24 小時營業
+  if (c < o) return 1440 - o + c;    // 跨午夜（11:00 開到隔天 03:00）
+  return c - o;
+}
+
 // 床位使用率：期間內每個床位被佔用的分鐘 ÷ 可營業分鐘
 function roomUsage(start, end, storeId) {
   const days = Math.max(1, require('./db').dateDiff(start, end) || 1);
@@ -160,8 +188,7 @@ function roomUsage(start, end, storeId) {
     .all(...(storeId ? [storeId] : []));
   const store = storeId ? db.prepare('SELECT * FROM stores WHERE id = ?').get(storeId) : null;
   const open = store?.open_time || '10:00', close = store?.close_time || '23:00';
-  const openMin = (Number(close.slice(0, 2)) * 60 + Number(close.slice(3, 5)))
-    - (Number(open.slice(0, 2)) * 60 + Number(open.slice(3, 5)));
+  const openMin = openMinutesOf(open, close);
   const dateExpr = 't.biz_date';
   const used = db.prepare(`SELECT t.room_id, COALESCE(SUM(t.minutes),0) AS m, COUNT(*) AS c
     FROM tickets t WHERE t.status = 'done' AND t.room_id IS NOT NULL
@@ -170,7 +197,12 @@ function roomUsage(start, end, storeId) {
   return rooms.map(r => {
     const u = map[r.id] || { m: 0, c: 0 };
     const cap = openMin * days * (r.capacity || 1);
-    return { ...r, used_minutes: u.m, tickets: u.c, capacity_minutes: cap, rate: cap ? u.m / cap : 0 };
+    return {
+      ...r, used_minutes: u.m, tickets: u.c, capacity_minutes: cap,
+      // 夾在 0~1：強制放行的重疊單會讓分子灌水，畫面上出現 130% 只會讓人以為系統壞了
+      rate: cap > 0 ? Math.min(1, Math.max(0, u.m / cap)) : 0,
+      open_minutes_per_day: openMin
+    };
   }).sort((a, b) => b.rate - a.rate);
 }
 
@@ -226,6 +258,6 @@ function repurchase({ days, storeId, therapistId } = {}) {
 }
 
 module.exports = {
-  serviceRevenue, cashFlow, expenses, monthly, daily,
+  serviceRevenue, cashFlow, expenses, monthly, daily, openMinutesOf,
   therapistRank, serviceRank, roomUsage, tax, repurchase
 };

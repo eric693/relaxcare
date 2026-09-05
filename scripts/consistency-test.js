@@ -168,8 +168,16 @@ eq('本月營收 = 鐘單應收加總', rev.revenue, raw.net);
 eq('本月抽成 = 鐘單抽成加總', rev.commission, raw.c, 0.05);
 eq('本月營收 = 四種付款加總', rev.revenue, raw.pc + raw.pw + raw.pp + raw.pv);
 const m = finance.monthly(period, null);
-eq('毛利 = 營收 − 抽成', m.gross_profit, rev.revenue - rev.commission, 0.05);
+// 毛利要扣商品銷貨成本。原本這條寫成「毛利 = 營收 − 抽成」，等於把漏扣成本
+// 這個 bug 寫成了預期行為 —— 匯出的損益表因此各列加不起來。
+eq('毛利 = 營收 − 抽成 − 商品成本', m.gross_profit, rev.revenue - rev.commission - m.cogs, 0.05);
 eq('淨利 = 毛利 − 費用', m.net_profit, m.gross_profit - m.expenses.total, 0.05);
+eq('商品銷貨成本 = 庫存流水的出庫成本',
+  m.cogs, require('../src/inventory').movement(start, end, null).cogs, 1);
+eq('商品毛利 = 商品營收 − 商品成本', m.retail_margin, rev.retail - m.cogs, 1);
+// 損益表的各列必須加得起來 —— 這是拿給會計看時第一眼會檢查的事
+eq('損益各列加總 = 毛利',
+  rev.revenue - m.cogs - m.commission, m.gross_profit, 0.05);
 // 各技師排行加總 = 全店營收（服務業績面）
 const rank = finance.therapistRank(start, end, null);
 eq('技師排行鐘數加總 = 全店鐘數', rank.reduce((s, r) => s + r.tickets, 0), rev.tickets, 0);
@@ -426,6 +434,23 @@ for (let i = 0; i < active.length; i++) {
   const orphan = db.prepare(`SELECT COUNT(*) n FROM ticket_items
     WHERE kind = 'addon' AND (ref_id IS NULL OR ref_id NOT IN (SELECT id FROM addons))`).get().n;
   ok('加購項目都連得回加購品主檔', orphan === 0, `${orphan} 筆孤兒`);
+}
+
+// ---- 19.5 床位使用率 ----
+// 24 小時店與跨午夜店曾經算出 0% 與負數 —— 兩種營業型態在這一行都很常見。
+{
+  const F = require('../src/finance');
+  eq('24 小時店（00:00–00:00）一天算 1440 分', F.openMinutesOf('00:00', '00:00'), 1440, 0);
+  eq('跨午夜店（11:00–03:00）一天算 960 分', F.openMinutesOf('11:00', '03:00'), 960, 0);
+  eq('一般店（10:00–23:00）一天算 780 分', F.openMinutesOf('10:00', '23:00'), 780, 0);
+  eq('半夜開到中午（22:00–12:00）算 840 分', F.openMinutesOf('22:00', '12:00'), 840, 0);
+  for (const st of db.prepare('SELECT id, name FROM stores WHERE active = 1').all()) {
+    for (const r of F.roomUsage(start, end, st.id)) {
+      ok(`${st.name} ${r.name} 可用時數為正`, r.capacity_minutes > 0, `${r.capacity_minutes} 分`);
+      ok(`${st.name} ${r.name} 使用率在 0~100% 之間`, r.rate >= 0 && r.rate <= 1,
+        `${(r.rate * 100).toFixed(1)}%`);
+    }
+  }
 }
 
 // ---- 20. 庫存：快取 = 流水加總 ----
