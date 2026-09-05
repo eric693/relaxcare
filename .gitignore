@@ -1,0 +1,16 @@
+node_modules/
+
+# 密鑰與環境設定：JWT_SECRET 與管理員密碼在這裡，絕對不進版控
+.env
+data/.secret
+
+# 資料庫本體與備份。這是營運資料不是原始碼：
+# 每天都在變（binary diff 沒有意義）、含客人個資、備份還會一直長大。
+# 要重建一份示範資料用 `npm run seed`。
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/backups/
+
+# 使用者上傳的照片、單據與同意書簽名
+data/uploads/
